@@ -123,12 +123,19 @@ func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *
 		slog.Info("OAuth redirect URI changed, re-registering", "server_id", serverID, "old_uri", auth.RegisteredRedirectURI, "new_uri", callbackURL)
 	}
 
-	// Try using stored registration endpoint first, fall back to re-discovery
+	// Run discovery if we're missing any of the endpoints required to start an
+	// OAuth flow. RegistrationEndpoint is needed to (re-)register; AuthURL and
+	// TokenURL are needed by StartAuthFlow / exchangeCode. A previous version
+	// of this function persisted only RegistrationEndpoint, so brand-new servers
+	// could end up with empty AuthURL/TokenURL even after a successful discovery
+	// pass — StartAuthFlow then built `"" + "?" + params` which the browser
+	// resolved relative to /oauth/start/, returning 404.
 	regEndpoint := auth.RegistrationEndpoint
-	if regEndpoint == "" {
+	needsDiscovery := regEndpoint == "" || cfg.Auth.AuthURL == "" || cfg.Auth.TokenURL == ""
+	var disc *OAuthDiscovery
+	if needsDiscovery {
 		// Try discovering from the server URL first, then from the auth URL origin
 		// (the OAuth provider may be on a different host than the MCP server)
-		var disc *OAuthDiscovery
 		for _, tryURL := range []string{cfg.URL, auth.AuthURL} {
 			if tryURL == "" {
 				continue
@@ -141,19 +148,21 @@ func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *
 			}
 			if d != nil && d.RegistrationEndpoint != "" {
 				disc = d
-				slog.Debug("OAuth discovery found registration endpoint", "endpoint", d.RegistrationEndpoint)
+				slog.Debug("OAuth discovery found endpoints", "registration", d.RegistrationEndpoint, "auth", d.AuthURL, "token", d.TokenURL)
 				break
 			}
 		}
-		if disc == nil || disc.RegistrationEndpoint == "" {
-			if auth.RegisteredRedirectURI == "" {
-				// Never tracked — can't re-register, proceed with existing credentials
-				slog.Info("no registration endpoint found, proceeding with existing credentials", "server_id", serverID)
-				return false, nil
+		if regEndpoint == "" {
+			if disc == nil || disc.RegistrationEndpoint == "" {
+				if auth.RegisteredRedirectURI == "" {
+					// Never tracked — can't re-register, proceed with existing credentials
+					slog.Info("no registration endpoint found, proceeding with existing credentials", "server_id", serverID)
+					return false, nil
+				}
+				return false, fmt.Errorf("redirect URI changed but cannot re-register: no registration endpoint found (update client credentials manually)")
 			}
-			return false, fmt.Errorf("redirect URI changed but cannot re-register: no registration endpoint found (update client credentials manually)")
+			regEndpoint = disc.RegistrationEndpoint
 		}
-		regEndpoint = disc.RegistrationEndpoint
 	}
 
 	reg, err := RegisterClient(ctx, regEndpoint, callbackURL)
@@ -166,6 +175,16 @@ func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *
 	cfg.Auth.ClientSecret = reg.ClientSecret
 	cfg.Auth.RegisteredRedirectURI = callbackURL
 	cfg.Auth.RegistrationEndpoint = regEndpoint
+	// Persist any newly-discovered authorization / token endpoints so subsequent
+	// StartAuthFlow / exchangeCode calls have the URLs they need.
+	if disc != nil {
+		if disc.AuthURL != "" {
+			cfg.Auth.AuthURL = disc.AuthURL
+		}
+		if disc.TokenURL != "" {
+			cfg.Auth.TokenURL = disc.TokenURL
+		}
+	}
 	// Clear old tokens since they belong to the old client
 	cfg.Auth.AccessToken = ""
 	cfg.Auth.RefreshToken = ""
