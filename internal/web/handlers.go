@@ -1028,7 +1028,7 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 		slog.Info("server slug renamed", "server_id", id, "old_name", oldName, "new_name", updated.Name)
 	}
 
-	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
+	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound) // #nosec G710 - id is a single path segment; target is a same-host relative path
 }
 
 func (h *Handlers) handleServerStart(w http.ResponseWriter, r *http.Request, id string) {
@@ -1085,7 +1085,7 @@ func (h *Handlers) handleServerEnumerate(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		slog.Error("error enumerating server", "server_id", id, "err", err) // #nosec G706
 	}
-	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
+	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound) // #nosec G710 - id is a single path segment; target is a same-host relative path
 }
 
 func (h *Handlers) handleServerHealthCheck(w http.ResponseWriter, r *http.Request, id string) {
@@ -1097,7 +1097,7 @@ func (h *Handlers) handleServerHealthCheck(w http.ResponseWriter, r *http.Reques
 		health, healthErr := h.healthMon.CheckHealth(r.Context(), id)
 		slog.Info("on-demand health check", "server_id", id, "health", health, "health_err", healthErr) // #nosec G706
 	}
-	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
+	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound) // #nosec G710 - id is a single path segment; target is a same-host relative path
 }
 
 func (h *Handlers) handleServerRebuild(w http.ResponseWriter, r *http.Request, id string) {
@@ -2368,11 +2368,11 @@ func (h *Handlers) handleProfileUpdate(w http.ResponseWriter, r *http.Request, p
 	name := strings.TrimSpace(r.FormValue("name"))
 	desc := strings.TrimSpace(r.FormValue("description"))
 	if name == "" {
-		http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
+		http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound) // #nosec G710 - profileID is a single path segment; target is a same-host relative path
 		return
 	}
 	_ = h.profileStore.Update(profileID, name, desc)
-	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
+	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound) // #nosec G710 - profileID is a single path segment; target is a same-host relative path
 }
 
 func (h *Handlers) handleProfileDelete(w http.ResponseWriter, r *http.Request, profileID string) {
@@ -2442,7 +2442,7 @@ func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, pro
 		_, _ = w.Write([]byte(`{"ok":true}`))
 		return
 	}
-	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
+	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound) // #nosec G710 - profileID is a single path segment; target is a same-host relative path
 }
 
 // --- OAuth ---
@@ -2505,7 +2505,7 @@ func (h *Handlers) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, authURL, http.StatusFound)
+	http.Redirect(w, r, authURL, http.StatusFound) // #nosec G710 - authURL is the configured OAuth provider's authorization endpoint (validated absolute https URL in StartAuthFlow); intended external redirect
 }
 
 func (h *Handlers) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
@@ -2537,7 +2537,7 @@ func (h *Handlers) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, fmt.Sprintf("/servers/%s", serverID), http.StatusFound)
+	http.Redirect(w, r, fmt.Sprintf("/servers/%s", serverID), http.StatusFound) // #nosec G710 - serverID is a server-generated id from the validated OAuth state; target is a same-host relative path
 }
 
 // --- Catalog API ---
@@ -3110,13 +3110,59 @@ func envToText(env map[string]string) string {
 	return strings.Join(lines, "\n")
 }
 
-// redirectBack sends the user back to the Referer if present, otherwise to fallback.
+// hasASCIIControl reports whether s contains any ASCII control character.
+func hasASCIIControl(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return r < 0x20 || r == 0x7f
+	})
+}
+
+// localRefererPath derives a same-host, host-less redirect target from the
+// Referer header, or returns ("", false) if the Referer is missing, malformed,
+// control-character-laden, or points at a different host. The returned value is
+// always a rooted relative path (path+query), so redirecting to it cannot leave
+// this app's host even though the Referer header itself is untrusted.
+func localRefererPath(r *http.Request, ref string) (string, bool) {
+	if ref == "" || hasASCIIControl(ref) || strings.TrimSpace(ref) != ref {
+		return "", false
+	}
+	u, err := url.Parse(ref)
+	if err != nil || u.Opaque != "" || u.User != nil {
+		return "", false
+	}
+	// Browsers send the Referer as an absolute URL; honor it only when it is an
+	// http(s) URL on this same host.
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return "", false
+	}
+	if u.Host == "" || !strings.EqualFold(u.Host, r.Host) {
+		return "", false
+	}
+	// Rebuild as a host-less reference so the redirect target is structurally
+	// incapable of leaving this host.
+	path := u.Path
+	if path == "" {
+		path = "/"
+	}
+	dest := (&url.URL{Path: path, RawQuery: u.RawQuery}).String()
+	if !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") || strings.Contains(dest, `\`) {
+		return "", false
+	}
+	return dest, true
+}
+
+// redirectBack sends the user back to the page named by the Referer when it
+// stays on this host, otherwise to fallback. The Referer is untrusted, so it is
+// reduced to a same-host relative path by localRefererPath to avoid an open
+// redirect (gosec G710).
 func redirectBack(w http.ResponseWriter, r *http.Request, fallback string) {
-	if ref := r.Header.Get("Referer"); ref != "" {
-		http.Redirect(w, r, ref, http.StatusFound)
+	if dest, ok := localRefererPath(r, r.Header.Get("Referer")); ok {
+		http.Redirect(w, r, dest, http.StatusFound) // #nosec G710 - reduced to a same-host relative path by localRefererPath
 		return
 	}
-	http.Redirect(w, r, fallback, http.StatusFound)
+	http.Redirect(w, r, fallback, http.StatusFound) // #nosec G710 - fallback is a server-constructed relative path
 }
 
 // validateServerURL checks that a URL is a valid http or https URL.

@@ -249,6 +249,13 @@ func (m *Manager) StartAuthFlow(serverID string, auth store.RemoteAuth) (string,
 		params.Set("scope", auth.Scopes)
 	}
 
+	// Validate the configured authorization endpoint is a well-formed absolute
+	// http(s) URL with a host before we redirect a browser to it. This keeps the
+	// redirect from being pointed at a relative or malformed target.
+	if u, err := url.Parse(auth.AuthURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("invalid OAuth authorization URL %q", auth.AuthURL)
+	}
+
 	authURL := auth.AuthURL + "?" + params.Encode()
 	return authURL, nil
 }
