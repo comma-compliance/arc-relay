@@ -503,14 +503,14 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// Use /data/downloads inside the container (matches the volume mount).
 	dataDir := filepath.Dir(h.cfg.Database.Path)
 	localPath := filepath.Join(dataDir, "downloads", binary)
-	if info, err := os.Lstat(localPath); err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0 { // #nosec G703 - path is validated via allowlist above
+	if info, err := os.Lstat(localPath); err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0 { // #nosec G703 - binary is validated against a fixed allowlist above, so localPath cannot traverse
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", binary))
-		http.ServeFile(w, r, localPath)
+		http.ServeFile(w, r, localPath) // #nosec G703 - binary is validated against a fixed allowlist above, so localPath cannot traverse
 		return
 	}
 
 	// Fall back to GitHub releases
 	githubURL := fmt.Sprintf("https://github.com/comma-compliance/arc-relay/releases/latest/download/%s", binary)
-	http.Redirect(w, r, githubURL, http.StatusFound)
+	http.Redirect(w, r, githubURL, http.StatusFound) // #nosec G710 - fixed github.com host, binary is allowlisted above
 }
