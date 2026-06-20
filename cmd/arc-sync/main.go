@@ -1134,7 +1134,8 @@ func runStatus() {
 
 		// Global CLAUDE.md
 		claudeMDPath := filepath.Join(homeDir, ".claude", "CLAUDE.md")
-		if data, err := os.ReadFile(claudeMDPath); err == nil && strings.Contains(string(data), claudeInstructionsMarker) { // #nosec G304 — homeDir + constant ".claude/CLAUDE.md"; status read of integration doc.
+		claudeData, claudeErr := os.ReadFile(claudeMDPath) // #nosec G304 - homeDir + constant ".claude/CLAUDE.md"; status read of integration doc.
+		if claudeErr == nil && strings.Contains(string(claudeData), claudeInstructionsMarker) {
 			fmt.Println("  ✓  Global CLAUDE.md:  installed")
 		} else {
 			fmt.Println("  ✗  Global CLAUDE.md:  not found  (run: arc-sync setup-claude)")
