@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/comma-compliance/arc-relay/internal/safefile"
 )
 
 const claudeConfigFile = ".mcp.json"
@@ -44,7 +46,9 @@ type mcpServerEntry struct {
 
 func (c *ClaudeCodeTarget) Read(projectDir, relayBaseURL string) ([]ManagedServer, error) {
 	path := filepath.Join(projectDir, claudeConfigFile)
-	data, err := os.ReadFile(path)
+	// Confine the read to projectDir so a symlinked .mcp.json in a hostile
+	// project tree cannot redirect us outside it.
+	data, err := safefile.ReadFile(projectDir, claudeConfigFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -81,7 +85,7 @@ func (c *ClaudeCodeTarget) Write(projectDir, relayBaseURL, apiKey string, server
 
 	// Load existing file or start fresh
 	var raw map[string]json.RawMessage
-	data, err := os.ReadFile(path)
+	data, err := safefile.ReadFile(projectDir, claudeConfigFile)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("reading %s: %w", path, err)
@@ -132,7 +136,7 @@ func (c *ClaudeCodeTarget) Write(projectDir, relayBaseURL, apiKey string, server
 	}
 	output = append(output, '\n')
 
-	if err := os.WriteFile(path, output, 0600); err != nil {
+	if err := safefile.WriteFile(projectDir, claudeConfigFile, output, 0600); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 
@@ -142,7 +146,7 @@ func (c *ClaudeCodeTarget) Write(projectDir, relayBaseURL, apiKey string, server
 func (c *ClaudeCodeTarget) Remove(projectDir string, names []string) ([]string, error) {
 	path := filepath.Join(projectDir, claudeConfigFile)
 
-	data, err := os.ReadFile(path)
+	data, err := safefile.ReadFile(projectDir, claudeConfigFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -194,7 +198,7 @@ func (c *ClaudeCodeTarget) Remove(projectDir string, names []string) ([]string, 
 	}
 	output = append(output, '\n')
 
-	if err := os.WriteFile(path, output, 0600); err != nil {
+	if err := safefile.WriteFile(projectDir, claudeConfigFile, output, 0600); err != nil {
 		return nil, fmt.Errorf("writing %s: %w", path, err)
 	}
 

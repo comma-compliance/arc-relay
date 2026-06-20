@@ -27,7 +27,7 @@ func GoldenFile(t *testing.T, name string, got []byte) {
 		return
 	}
 
-	expected, err := os.ReadFile(golden)
+	expected, err := os.ReadFile(golden) // #nosec G304 — test-only helper; golden is "testdata/golden/" + a test-supplied constant name.
 	if err != nil {
 		t.Fatalf("failed to read golden file %s (run with -update to create): %v", golden, err)
 	}

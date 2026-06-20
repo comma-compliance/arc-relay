@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/comma-compliance/arc-relay/internal/safefile"
 )
 
 const (
@@ -44,7 +46,8 @@ func ConfigPath(configDir string) string {
 // if the config file doesn't exist or is invalid.
 func LoadConfig(configDir string) (*Config, error) {
 	path := ConfigPath(configDir)
-	data, err := os.ReadFile(path)
+	// Confine the read to configDir; the file holds the relay API key.
+	data, err := safefile.ReadFile(configDir, configFileName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("no configuration found — run 'arc-sync init' to get started, or 'arc-sync --help' for usage")
@@ -81,7 +84,7 @@ func SaveConfig(configDir string, cfg *Config) error {
 	data = append(data, '\n')
 
 	path := ConfigPath(configDir)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := safefile.WriteFile(configDir, configFileName, data, 0600); err != nil {
 		return fmt.Errorf("writing config %s: %w", path, err)
 	}
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/comma-compliance/arc-relay/internal/safefile"
 )
 
 const stateFileName = "state.json"
@@ -30,8 +32,7 @@ func StatePath(configDir string) string {
 // LoadState loads state from the given directory. Returns an empty state if the
 // file doesn't exist.
 func LoadState(configDir string) (*State, error) {
-	path := StatePath(configDir)
-	data, err := os.ReadFile(path)
+	data, err := safefile.ReadFile(configDir, stateFileName)
 	if err != nil {
 		// Return empty state on any read error — callers use
 		// state, _ := LoadState() and would panic on nil.
@@ -65,7 +66,7 @@ func SaveState(configDir string, state *State) error {
 	data = append(data, '\n')
 
 	path := StatePath(configDir)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := safefile.WriteFile(configDir, stateFileName, data, 0600); err != nil {
 		return fmt.Errorf("writing state %s: %w", path, err)
 	}
 

@@ -85,7 +85,10 @@ func CheckGitignore(projectDir, filename string) []Warning {
 // in the .gitignore file. This is a basic check — it doesn't handle negation,
 // directory-only patterns, or nested .gitignore files.
 func isInGitignore(gitignorePath, filename string) bool {
-	f, err := os.Open(gitignorePath)
+	// gitignorePath is filepath.Join(projectDir, ".gitignore") built by the
+	// caller from a constant filename; this is a read-only scan for a gitignore
+	// entry (no credentials read or written), so it is confined by construction.
+	f, err := os.Open(gitignorePath) // #nosec G304 — projectDir + constant ".gitignore"; read-only gitignore scan.
 	if err != nil {
 		return false
 	}
