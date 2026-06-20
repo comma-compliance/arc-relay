@@ -389,7 +389,7 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 	hasInstructions := false
 	hasSkill := false
 
-	if data, err := os.ReadFile(claudeMDPath); err == nil {
+	if data, err := os.ReadFile(claudeMDPath); err == nil { // #nosec G304 — homeDir + constant ".claude/CLAUDE.md"; integration-doc read, no credentials.
 		hasInstructions = strings.Contains(string(data), claudeInstructionsMarker)
 	}
 	if _, err := os.Stat(skillPath); err == nil {
@@ -434,7 +434,7 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 		if err := os.MkdirAll(claudeDir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "   Warning: could not create %s: %v\n", claudeDir, err)
 		} else {
-			f, err := os.OpenFile(claudeMDPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+			f, err := os.OpenFile(claudeMDPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 — homeDir + constant ".claude/CLAUDE.md"; appends integration doc, no credentials.
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "   Warning: could not write %s: %v\n", claudeMDPath, err)
 			} else {
@@ -615,7 +615,7 @@ func installProjectClaude(projectDir string) bool {
 		return false
 	}
 
-	f, err := os.OpenFile(claudePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G302 - project file, git will set perms
+	f, err := os.OpenFile(claudePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G302 G304 - projectDir + constant ".claude/CLAUDE.md"; appends integration doc, no credentials. git will set perms
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "   Warning: could not write %s: %v\n", claudePath, err)
 		return false
@@ -641,7 +641,7 @@ func installProjectCodex(projectDir string) bool {
 	}
 
 	snippet := projectCodexSnippet
-	if data, err := os.ReadFile(agentsPath); err == nil && len(data) > 0 {
+	if data, err := os.ReadFile(agentsPath); err == nil && len(data) > 0 { // #nosec G304 — projectDir + constant "AGENTS.md"; integration-doc read, no credentials.
 		snippet = "\n" + snippet
 	}
 
@@ -671,7 +671,7 @@ func installSkillFromEmbed(skillDir, skillPath string) error {
 		return fmt.Errorf("creating skill directory: %w", err)
 	}
 
-	if err := os.WriteFile(skillPath, embeddedSkillMD, 0600); err != nil {
+	if err := os.WriteFile(skillPath, embeddedSkillMD, 0600); err != nil { // #nosec G304 — homeDir + constant "skills/arc-sync/SKILL.md"; writes embedded skill doc, no credentials.
 		return fmt.Errorf("writing skill: %w", err)
 	}
 
@@ -679,7 +679,9 @@ func installSkillFromEmbed(skillDir, skillPath string) error {
 }
 
 func hasMarker(path, marker string) bool {
-	data, err := os.ReadFile(path)
+	// path is always built by callers as homeDir/projectDir + a constant
+	// integration-doc name (CLAUDE.md / AGENTS.md); read-only marker check.
+	data, err := os.ReadFile(path) // #nosec G304 — caller-constructed homeDir/projectDir + constant doc name; read-only marker check.
 	if err != nil {
 		return false
 	}
@@ -691,7 +693,7 @@ func appendSnippetIfMissing(path, marker, snippet string) error {
 		return nil
 	}
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 — caller-constructed homeDir/projectDir + constant doc name; appends integration doc, no credentials.
 	if err != nil {
 		return err
 	}
@@ -1132,7 +1134,7 @@ func runStatus() {
 
 		// Global CLAUDE.md
 		claudeMDPath := filepath.Join(homeDir, ".claude", "CLAUDE.md")
-		if data, err := os.ReadFile(claudeMDPath); err == nil && strings.Contains(string(data), claudeInstructionsMarker) {
+		if data, err := os.ReadFile(claudeMDPath); err == nil && strings.Contains(string(data), claudeInstructionsMarker) { // #nosec G304 — homeDir + constant ".claude/CLAUDE.md"; status read of integration doc.
 			fmt.Println("  ✓  Global CLAUDE.md:  installed")
 		} else {
 			fmt.Println("  ✗  Global CLAUDE.md:  not found  (run: arc-sync setup-claude)")

@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/comma-compliance/arc-relay/internal/safefile"
 )
 
 const codexConfigFile = ".codex/config.toml"
@@ -30,8 +32,7 @@ func (c *CodexTarget) Detect(projectDir string) bool {
 }
 
 func (c *CodexTarget) Read(projectDir, relayBaseURL string) ([]ManagedServer, error) {
-	path := filepath.Join(projectDir, codexConfigFile)
-	raw, err := loadCodexConfig(path)
+	raw, err := loadCodexConfig(projectDir)
 	if err != nil {
 		return nil, err
 	}
@@ -66,9 +67,7 @@ func (c *CodexTarget) Read(projectDir, relayBaseURL string) ([]ManagedServer, er
 }
 
 func (c *CodexTarget) Write(projectDir, relayBaseURL, apiKey string, servers []ManagedServer) error {
-	path := filepath.Join(projectDir, codexConfigFile)
-
-	raw, err := loadCodexConfig(path)
+	raw, err := loadCodexConfig(projectDir)
 	if err != nil {
 		return err
 	}
@@ -91,13 +90,11 @@ func (c *CodexTarget) Write(projectDir, relayBaseURL, apiKey string, servers []M
 	}
 
 	raw["mcp_servers"] = mcpServers
-	return writeCodexConfig(path, raw)
+	return writeCodexConfig(projectDir, raw)
 }
 
 func (c *CodexTarget) Remove(projectDir string, names []string) ([]string, error) {
-	path := filepath.Join(projectDir, codexConfigFile)
-
-	raw, err := loadCodexConfig(path)
+	raw, err := loadCodexConfig(projectDir)
 	if err != nil {
 		return nil, err
 	}
@@ -131,15 +128,18 @@ func (c *CodexTarget) Remove(projectDir string, names []string) ([]string, error
 	}
 
 	raw["mcp_servers"] = mcpServers
-	if err := writeCodexConfig(path, raw); err != nil {
+	if err := writeCodexConfig(projectDir, raw); err != nil {
 		return nil, err
 	}
 
 	return removed, nil
 }
 
-func loadCodexConfig(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
+// loadCodexConfig reads projectDir/.codex/config.toml, confined to projectDir so
+// a symlinked config in a hostile project tree cannot redirect the read.
+func loadCodexConfig(projectDir string) (map[string]any, error) {
+	path := filepath.Join(projectDir, codexConfigFile)
+	data, err := safefile.ReadFile(projectDir, codexConfigFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -159,7 +159,11 @@ func loadCodexConfig(path string) (map[string]any, error) {
 	return raw, nil
 }
 
-func writeCodexConfig(path string, raw map[string]any) error {
+// writeCodexConfig writes projectDir/.codex/config.toml, confined to projectDir.
+// The .codex parent directory is created first so the confined write has an
+// existing, in-base parent to resolve against.
+func writeCodexConfig(projectDir string, raw map[string]any) error {
+	path := filepath.Join(projectDir, codexConfigFile)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
@@ -169,7 +173,7 @@ func writeCodexConfig(path string, raw map[string]any) error {
 		return fmt.Errorf("encoding %s: %w", path, err)
 	}
 
-	if err := os.WriteFile(path, buf.Bytes(), 0600); err != nil {
+	if err := safefile.WriteFile(projectDir, codexConfigFile, buf.Bytes(), 0600); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 
