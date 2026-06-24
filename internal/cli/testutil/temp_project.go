@@ -49,11 +49,11 @@ func TempConfigDir(t *testing.T) string {
 // parent directories as needed.
 func WriteFile(t *testing.T, path, content string) {
 	t.Helper()
-	err := os.MkdirAll(filepath.Dir(path), 0755)
+	err := os.MkdirAll(filepath.Dir(path), 0750)
 	if err != nil {
 		t.Fatalf("failed to create parent dirs for %s: %v", path, err)
 	}
-	err = os.WriteFile(path, []byte(content), 0644)
+	err = os.WriteFile(path, []byte(content), 0600)
 	if err != nil {
 		t.Fatalf("failed to write %s: %v", path, err)
 	}
