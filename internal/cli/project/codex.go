@@ -164,7 +164,7 @@ func loadCodexConfig(projectDir string) (map[string]any, error) {
 // existing, in-base parent to resolve against.
 func writeCodexConfig(projectDir string, raw map[string]any) error {
 	path := filepath.Join(projectDir, codexConfigFile)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
 
