@@ -610,7 +610,7 @@ func installProjectClaude(projectDir string) bool {
 		return false
 	}
 
-	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+	if err := os.MkdirAll(claudeDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "   Warning: could not create %s: %v\n", claudeDir, err)
 		return false
 	}
@@ -667,7 +667,7 @@ func hasProjectCodex(projectDir string) bool {
 }
 
 func installSkillFromEmbed(skillDir, skillPath string) error {
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
+	if err := os.MkdirAll(skillDir, 0750); err != nil {
 		return fmt.Errorf("creating skill directory: %w", err)
 	}
 
@@ -1190,7 +1190,7 @@ func healthDisplay(s relay.Server) string {
 func tryDeviceAuth(baseURL string) string {
 	// Check if the server supports device auth
 	checkURL := baseURL + "/api/auth/device"
-	resp, err := http.Post(checkURL, "application/json", strings.NewReader("{}"))
+	resp, err := http.Post(checkURL, //nolint:gosec // #nosec G107 -- baseURL is operator-configured server URL, not user input "application/json", strings.NewReader("{}"))
 	if err != nil {
 		return "" // Server not reachable or doesn't support device auth
 	}
@@ -1234,7 +1234,7 @@ func tryDeviceAuth(baseURL string) string {
 		time.Sleep(time.Duration(interval) * time.Second)
 
 		tokenBody, _ := json.Marshal(map[string]string{"device_code": deviceResp.DeviceCode})
-		tokenResp, err := http.Post(tokenURL, "application/json", bytes.NewReader(tokenBody))
+		tokenResp, err := http.Post(tokenURL, //nolint:gosec // #nosec G107 -- baseURL is operator-configured server URL, not user input "application/json", bytes.NewReader(tokenBody))
 		if err != nil {
 			continue
 		}
