@@ -1190,7 +1190,7 @@ func healthDisplay(s relay.Server) string {
 func tryDeviceAuth(baseURL string) string {
 	// Check if the server supports device auth
 	checkURL := baseURL + "/api/auth/device"
-	resp, err := http.Post(checkURL, //nolint:gosec // #nosec G107 -- baseURL is operator-configured server URL, not user input "application/json", strings.NewReader("{}"))
+	 resp, err := http.Post(checkURL, "application/json", strings.NewReader("{}")) //nolint:gosec // #nosec G107 -- baseURL is operator-configured server URL, not user input
 	if err != nil {
 		return "" // Server not reachable or doesn't support device auth
 	}
@@ -1234,7 +1234,7 @@ func tryDeviceAuth(baseURL string) string {
 		time.Sleep(time.Duration(interval) * time.Second)
 
 		tokenBody, _ := json.Marshal(map[string]string{"device_code": deviceResp.DeviceCode})
-		tokenResp, err := http.Post(tokenURL, //nolint:gosec // #nosec G107 -- baseURL is operator-configured server URL, not user input "application/json", bytes.NewReader(tokenBody))
+		tokenResp, err := http.Post(tokenURL, "application/json", bytes.NewReader(tokenBody)) //nolint:gosec // #nosec G107 -- baseURL is operator-configured server URL, not user input
 		if err != nil {
 			continue
 		}
