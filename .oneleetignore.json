@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.oneleet.com/code-security/oneleetignore.schema.json",
+  "version": 1,
+  "ignores": [
+    {
+      "pathPatterns": ["/cmd/arc-sync/main.go"],
+      "$comment": "False positive: file paths come from validated config structs at startup. TODO: narrow to specific ruleIds once Oneleet SARIF rule identifier for file-inclusion (G304) is available.",
+      "reason": "False positive (file inclusion). File paths at lines 392 and 644 are read from validated configuration structs set at application startup — no user-supplied input reaches these call sites. #nosec G304 annotations are present but Oneleet SAST does not honour go-sec suppression comments."
+    },
+    {
+      "pathPatterns": ["/cmd/arc-sync/main.go"],
+      "$comment": "False positive: URLs are device-auth endpoints from validated config. TODO: narrow to specific ruleIds once Oneleet SARIF rule identifier for HTTP variable URL (G107) is available.",
+      "reason": "False positive (HTTP variable URL). URLs at lines 1193 and 1237 are device-auth endpoints constructed from validated application config, not from user input. #nosec G107 annotations are present but Oneleet SAST does not honour go-sec suppression comments."
+    }
+  ]
+}
