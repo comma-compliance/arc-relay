@@ -12,7 +12,7 @@ func TempProject(t *testing.T, mcpJSON string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if mcpJSON != "" {
-		err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0644)
+		err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0600)
 		if err != nil {
 			t.Fatalf("failed to write .mcp.json: %v", err)
 		}
@@ -25,12 +25,12 @@ func TempProject(t *testing.T, mcpJSON string) string {
 func TempProjectWithGit(t *testing.T, mcpJSON, gitignore string) string {
 	t.Helper()
 	dir := TempProject(t, mcpJSON)
-	err := os.Mkdir(filepath.Join(dir, ".git"), 0755)
+	err := os.Mkdir(filepath.Join(dir, ".git"), 0750)
 	if err != nil {
 		t.Fatalf("failed to create .git dir: %v", err)
 	}
 	if gitignore != "" {
-		err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(gitignore), 0644)
+		err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(gitignore), 0600)
 		if err != nil {
 			t.Fatalf("failed to write .gitignore: %v", err)
 		}
