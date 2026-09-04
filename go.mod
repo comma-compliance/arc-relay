@@ -1,6 +1,6 @@
 module github.com/comma-compliance/arc-relay
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.4.0
@@ -9,7 +9,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/moby/moby/api v1.53.0
 	github.com/moby/moby/client v0.1.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 )
 
 require (
