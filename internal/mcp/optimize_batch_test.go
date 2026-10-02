@@ -159,9 +159,9 @@ func TestOptimizeTools_OutOfOrderCompletion(t *testing.T) {
 func TestOptimizeTools_FailureCancelsQueuedBatches(t *testing.T) {
 	var requests int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt64(&requests, 1)
-		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), `tool_00`) {
+		_, _ = io.ReadAll(r.Body)
+		// Whichever batch arrives first fails; goroutine start order is not fixed.
+		if atomic.AddInt64(&requests, 1) == 1 {
 			http.Error(w, `{"error":{"type":"api_error","message":"boom"}}`, http.StatusInternalServerError)
 			return
 		}
@@ -176,8 +176,8 @@ func TestOptimizeTools_FailureCancelsQueuedBatches(t *testing.T) {
 
 	start := time.Now()
 	_, err := OptimizeTools(t.Context(), client, bigTools(16)) // 8 batches
-	if err == nil || !strings.Contains(err.Error(), "batch 1 of 8") {
-		t.Fatalf("expected batch 1 failure, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "of 8") {
+		t.Fatalf("expected the failing batch's error, got %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Errorf("in-flight batches were not cancelled (took %v)", elapsed)
