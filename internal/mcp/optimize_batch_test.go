@@ -155,3 +155,34 @@ func TestOptimizeTools_OutOfOrderCompletion(t *testing.T) {
 		}
 	}
 }
+
+func TestOptimizeTools_FailureCancelsQueuedBatches(t *testing.T) {
+	var requests int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&requests, 1)
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `tool_00`) {
+			http.Error(w, `{"error":{"type":"api_error","message":"boom"}}`, http.StatusInternalServerError)
+			return
+		}
+		// Other batches stay busy until the client cancels them.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	client := llm.NewClient("test-key", "test-model", 0).WithBaseURL(srv.URL)
+
+	start := time.Now()
+	_, err := OptimizeTools(t.Context(), client, bigTools(16)) // 8 batches
+	if err == nil || !strings.Contains(err.Error(), "batch 1 of 8") {
+		t.Fatalf("expected batch 1 failure, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("in-flight batches were not cancelled (took %v)", elapsed)
+	}
+	if n := atomic.LoadInt64(&requests); n > batchConcurrency {
+		t.Errorf("%d requests sent, want at most %d (queued batches should not start)", n, batchConcurrency)
+	}
+}

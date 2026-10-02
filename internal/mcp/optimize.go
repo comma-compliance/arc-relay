@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -236,27 +235,44 @@ func OptimizeTools(ctx context.Context, client *llm.Client, tools []Tool) ([]Too
 	const charBudget = 30000
 	batches := batchBySize(pruned, charBudget)
 
-	// Run batches concurrently; results are reassembled in batch order.
+	// Run batches concurrently; results are reassembled in batch order. The
+	// first failure cancels the rest, since any failed batch fails the run.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	results := make([][]Tool, len(batches))
-	errs := make([]error, len(batches))
+	var firstErr error
+	var errOnce sync.Once
 	sem := make(chan struct{}, batchConcurrency)
 	var wg sync.WaitGroup
 	for batchIdx, batch := range batches {
 		wg.Add(1)
 		go func(batchIdx int, batch []Tool) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
 			result, err := optimizeBatch(ctx, client, batch)
 			if err != nil {
-				errs[batchIdx] = fmt.Errorf("optimizing batch %d of %d (%d tools): %w", batchIdx+1, len(batches), len(batch), err)
+				errOnce.Do(func() {
+					firstErr = fmt.Errorf("optimizing batch %d of %d (%d tools): %w", batchIdx+1, len(batches), len(batch), err)
+					cancel()
+				})
 				return
 			}
 			results[batchIdx] = result
 		}(batchIdx, batch)
 	}
 	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	var optimized []Tool

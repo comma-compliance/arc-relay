@@ -58,28 +58,26 @@
     </thead>
     <tbody>
       {{range .Rows}}
-      <tr data-id="{{.ID}}" data-needs="{{.NeedsRun}}" data-enumerated="{{.Enumerated}}"{{if .ErrorMsg}} class="has-detail"{{end}}>
+      <tr data-id="{{.ID}}" data-needs="{{.NeedsRun}}" data-inflight="{{.InFlight}}" data-enumerated="{{.Enumerated}}"{{if .ErrorMsg}} class="has-detail"{{end}}>
         <td><input type="checkbox" class="row-select" value="{{.ID}}" {{if not .Enumerated}}disabled title="Start the server to enumerate its tools"{{end}}></td>
         <td><a href="/servers/{{.ID}}">{{.Name}}</a>{{if not .Enumerated}} <span class="badge badge-{{.ServerStatus}}">{{.ServerStatus}}</span>{{end}}</td>
         <td>{{if .Enumerated}}{{.ToolCount}}{{else}}-{{end}}</td>
         <td>{{if .Enumerated}}~{{commas .OriginalTokens}}{{else}}-{{end}}</td>
-        <td>{{if .OptimizedTokens}}~{{commas .OptimizedTokens}}{{else}}-{{end}}</td>
-        <td>{{if .OptimizedTokens}}{{.SavingsPercent}}%{{else}}-{{end}}</td>
+        <td class="opt-tokens-cell">{{if .OptimizedTokens}}~{{commas .OptimizedTokens}}{{else}}-{{end}}</td>
+        <td class="savings-cell">{{if .OptimizedTokens}}{{.SavingsPercent}}%{{else}}-{{end}}</td>
         <td class="status-cell">
-          {{if .InFlight}}<span class="badge badge-starting">{{.Status}}</span>
-          {{else}}<span class="badge {{optBadge .Status}}" {{if .ErrorMsg}}title="{{.ErrorMsg}}"{{end}}>{{.Status}}</span>{{end}}
+          {{if .InFlight}}<span class="badge badge-starting status-badge">{{.Status}}</span>
+          {{else}}<span class="badge {{optBadge .Status}} status-badge">{{.Status}}</span>{{end}}
           {{if and .IsStale (ne .Status "stale")}} <span class="badge badge-denied" title="Tools changed since this was optimized">tools changed</span>{{end}}
         </td>
         <td>{{if .Model}}<code style="font-size:0.75rem;white-space:nowrap">{{.Model}}</code>{{if .ModelOutdated}} <span class="badge badge-denied" title="Optimized with a different model than the current one">old model</span>{{end}}{{else}}-{{end}}</td>
-        <td style="white-space:nowrap">{{ago .UpdatedAt}}</td>
+        <td class="updated-cell" style="white-space:nowrap">{{ago .UpdatedAt}}</td>
         <td><input type="checkbox" class="serve-toggle" data-id="{{.ID}}" onchange="toggleServe(this.dataset.id, this.checked).then(syncServeAll)" {{if .Enabled}}checked{{end}}></td>
       </tr>
-      {{if .ErrorMsg}}
-      <tr class="detail-row" data-detail-for="{{.ID}}">
+      <tr class="detail-row" data-detail-for="{{.ID}}"{{if not .ErrorMsg}} hidden{{end}}>
         <td></td>
-        <td colspan="9" style="font-size:0.8rem;color:var(--danger);word-break:break-word">{{.ErrorMsg}}</td>
+        <td colspan="9" class="detail-text" style="font-size:0.8rem;color:var(--danger);word-break:break-word">{{.ErrorMsg}}</td>
       </tr>
-      {{end}}
       {{end}}
     </tbody>
   </table>
@@ -173,6 +171,34 @@ function setServing(enabled) {
     .then(function() { location.reload(); });
 }
 
+var badgeClasses = {ready: 'badge-success', pending: 'badge-starting', running: 'badge-starting', stale: 'badge-denied', error: 'badge-error', interrupted: 'badge-error'};
+
+function fmt(n) { return n.toLocaleString('en-US'); }
+
+// updateRow refreshes one server's cells from a /optimize/status entry.
+function updateRow(row) {
+  var tr = document.querySelector('tr[data-id="' + row.id + '"]');
+  if (!tr) return;
+  var badge = tr.querySelector('.status-badge');
+  if (badge) {
+    badge.textContent = row.status;
+    badge.className = 'badge status-badge ' + (row.in_flight ? 'badge-starting' : (badgeClasses[row.status] || 'badge-unknown'));
+  }
+  tr.querySelector('.opt-tokens-cell').textContent = row.optimized_tokens ? '~' + fmt(row.optimized_tokens) : '-';
+  tr.querySelector('.savings-cell').textContent = row.optimized_tokens ? row.savings_percent + '%' : '-';
+  if (tr.dataset.inflight === 'true' && !row.in_flight) {
+    tr.querySelector('.updated-cell').textContent = 'just now';
+  }
+  tr.dataset.inflight = row.in_flight ? 'true' : 'false';
+  tr.dataset.needs = row.needs_run ? 'true' : 'false';
+  var detail = document.querySelector('tr[data-detail-for="' + row.id + '"]');
+  if (detail) {
+    detail.querySelector('.detail-text').textContent = row.error_msg || '';
+    detail.hidden = !row.error_msg;
+    tr.classList.toggle('has-detail', !!row.error_msg);
+  }
+}
+
 var polling = false;
 function pollUntilDone() {
   if (polling) return;
@@ -188,11 +214,9 @@ function pollUntilDone() {
         var busy = false;
         rows.forEach(function(row) {
           if (row.in_flight) busy = true;
-          var tr = document.querySelector('tr[data-id="' + row.id + '"]');
-          if (!tr) return;
-          var badge = tr.querySelector('.status-cell .badge');
-          if (badge && row.in_flight) { badge.textContent = row.status; badge.className = 'badge badge-starting'; }
+          updateRow(row);
         });
+        // Rows are already current; reload once at the end to refresh the totals.
         if (!busy) { clearInterval(timer); location.reload(); }
       })
       .catch(function() { clearInterval(timer); location.reload(); });
