@@ -18,6 +18,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/optimizer"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -174,14 +175,23 @@ func main() {
 
 	// Initialize tool optimization stores and LLM client
 	optimizeStore := store.NewOptimizeStore(db)
-	llmClient := llm.NewClient(cfg.LLM.APIKey, cfg.LLM.Model)
-	if llmClient.Available() {
-		slog.Info("LLM tool optimizer available", "model", llmClient.Model())
+	if cfg.LLM.Timeout != "" && cfg.LLM.TimeoutDuration() == 0 {
+		slog.Warn("invalid LLM timeout, using default", "value", cfg.LLM.Timeout, "default", llm.DefaultTimeout)
 	}
+	llmClient := llm.NewClient(cfg.LLM.APIKey, cfg.LLM.Model, cfg.LLM.TimeoutDuration())
+	if llmClient.Available() {
+		slog.Info("LLM tool optimizer available", "model", llmClient.Model(), "timeout", llmClient.Timeout())
+	}
+	if n, err := optimizeStore.ResetInFlight(); err != nil {
+		slog.Warn("optimize: failed to reset interrupted jobs", "err", err)
+	} else if n > 0 {
+		slog.Info("optimize: reset jobs interrupted by restart", "count", n)
+	}
+	optimizeRunner := optimizer.NewRunner(optimizeStore, llmClient, 0)
 	proxyMgr.OptimizeStore = optimizeStore
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, optimizeRunner)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

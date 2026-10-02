@@ -1,0 +1,205 @@
+{{define "title"}}Tool Context Optimizer{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Tool Context Optimizer</h2>
+</div>
+
+<div class="card">
+  <div style="display:flex;gap:2rem;flex-wrap:wrap;margin-bottom:0.5rem">
+    <div>
+      <div style="font-size:1.4rem;font-weight:600">~{{commas .TotalOriginal}}</div>
+      <div style="font-size:0.8rem;color:var(--text-muted)">Original tokens (all servers)</div>
+    </div>
+    <div>
+      <div style="font-size:1.4rem;font-weight:600">~{{commas .TotalServed}}</div>
+      <div style="font-size:0.8rem;color:var(--text-muted)">Tokens currently served</div>
+    </div>
+    <div>
+      <div style="font-size:1.4rem;font-weight:600">{{.TotalSavings}}%</div>
+      <div style="font-size:0.8rem;color:var(--text-muted)">Savings</div>
+    </div>
+  </div>
+  <div style="font-size:0.85rem;color:var(--text-muted)">
+    {{if .LLMAvailable}}
+    Model <code>{{.Model}}</code>, per-request timeout {{.Timeout}}. Change with <code>ARC_RELAY_LLM_MODEL</code> and <code>ARC_RELAY_LLM_TIMEOUT</code>.
+    {{else}}
+    Set <code>ARC_RELAY_LLM_API_KEY</code> to enable LLM optimization.
+    {{end}}
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.75rem">
+    <button class="btn btn-outline btn-sm" onclick="selectRows('needs')">Select needing a run ({{.NeedsRunCount}})</button>
+    <button class="btn btn-outline btn-sm" onclick="selectRows('all')">Select all</button>
+    <button class="btn btn-outline btn-sm" onclick="selectRows('none')">Clear</button>
+    <span style="flex:1"></span>
+    <button class="btn btn-outline btn-sm" onclick="setServing(true)">Serve optimized</button>
+    <button class="btn btn-outline btn-sm" onclick="setServing(false)">Serve original</button>
+    <button class="btn btn-primary btn-sm" id="run-btn" onclick="runSelected()" {{if not .LLMAvailable}}disabled{{end}}>Optimize selected</button>
+  </div>
+  <div id="run-msg" style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.5rem"></div>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="select-all" onchange="selectRows(this.checked ? 'all' : 'none')"></th>
+        <th>Server</th>
+        <th>Tools</th>
+        <th>Original</th>
+        <th>Optimized</th>
+        <th>Savings</th>
+        <th>Status</th>
+        <th>Model</th>
+        <th>Updated</th>
+        <th><label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer"><input type="checkbox" id="serve-all" onchange="serveAll(this)"> Serve optimized</label></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}
+      <tr data-id="{{.ID}}" data-needs="{{.NeedsRun}}" data-enumerated="{{.Enumerated}}"{{if .ErrorMsg}} class="has-detail"{{end}}>
+        <td><input type="checkbox" class="row-select" value="{{.ID}}" {{if not .Enumerated}}disabled title="Start the server to enumerate its tools"{{end}}></td>
+        <td><a href="/servers/{{.ID}}">{{.Name}}</a>{{if not .Enumerated}} <span class="badge badge-{{.ServerStatus}}">{{.ServerStatus}}</span>{{end}}</td>
+        <td>{{if .Enumerated}}{{.ToolCount}}{{else}}-{{end}}</td>
+        <td>{{if .Enumerated}}~{{commas .OriginalTokens}}{{else}}-{{end}}</td>
+        <td>{{if .OptimizedTokens}}~{{commas .OptimizedTokens}}{{else}}-{{end}}</td>
+        <td>{{if .OptimizedTokens}}{{.SavingsPercent}}%{{else}}-{{end}}</td>
+        <td class="status-cell">
+          {{if .InFlight}}<span class="badge badge-starting">{{.Status}}</span>
+          {{else}}<span class="badge {{optBadge .Status}}" {{if .ErrorMsg}}title="{{.ErrorMsg}}"{{end}}>{{.Status}}</span>{{end}}
+          {{if and .IsStale (ne .Status "stale")}} <span class="badge badge-denied" title="Tools changed since this was optimized">tools changed</span>{{end}}
+        </td>
+        <td>{{if .Model}}<code style="font-size:0.75rem;white-space:nowrap">{{.Model}}</code>{{if .ModelOutdated}} <span class="badge badge-denied" title="Optimized with a different model than the current one">old model</span>{{end}}{{else}}-{{end}}</td>
+        <td style="white-space:nowrap">{{ago .UpdatedAt}}</td>
+        <td><input type="checkbox" class="serve-toggle" data-id="{{.ID}}" onchange="toggleServe(this.dataset.id, this.checked).then(syncServeAll)" {{if .Enabled}}checked{{end}}></td>
+      </tr>
+      {{if .ErrorMsg}}
+      <tr class="detail-row" data-detail-for="{{.ID}}">
+        <td></td>
+        <td colspan="9" style="font-size:0.8rem;color:var(--danger);word-break:break-word">{{.ErrorMsg}}</td>
+      </tr>
+      {{end}}
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<style>
+  tr.has-detail td { border-bottom: none; }
+  tr.detail-row td { padding-top: 0; }
+</style>
+
+<script>
+var _csrfToken = _csrfToken || (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+
+function rowBoxes() { return Array.from(document.querySelectorAll('.row-select')); }
+
+function selectRows(mode) {
+  rowBoxes().forEach(function(cb) {
+    if (cb.disabled) { cb.checked = false; return; }
+    var row = cb.closest('tr');
+    cb.checked = mode === 'all' || (mode === 'needs' && row.dataset.needs === 'true');
+  });
+}
+
+function selectedIDs() {
+  return rowBoxes().filter(function(cb) { return cb.checked; }).map(function(cb) { return cb.value; });
+}
+
+function runSelected() {
+  var ids = selectedIDs();
+  if (!ids.length) { alert('Select at least one server.'); return; }
+  var btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  fetch('/optimize/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+    body: JSON.stringify({server_ids: ids})
+  })
+    .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.error || r.statusText); return d; }); })
+    .then(function(d) {
+      var msg = 'Started ' + d.started.length + ' job(s).';
+      var skipped = Object.keys(d.skipped || {});
+      if (skipped.length) {
+        msg += ' Skipped: ' + skipped.map(function(k) { return k + ' (' + d.skipped[k] + ')'; }).join(', ');
+      }
+      document.getElementById('run-msg').textContent = msg;
+      pollUntilDone();
+    })
+    .catch(function(err) {
+      alert('Failed to start: ' + err.message);
+      btn.disabled = false;
+    });
+}
+
+function toggleServe(id, enabled) {
+  return fetch('/servers/' + id + '/optimize-toggle', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+    body: JSON.stringify({enabled: enabled})
+  }).then(function(r) {
+    if (!r.ok) { alert('Failed to update serving for a server'); location.reload(); }
+  });
+}
+
+function serveBoxes() { return Array.from(document.querySelectorAll('.serve-toggle')); }
+
+function syncServeAll() {
+  var boxes = serveBoxes();
+  var on = boxes.filter(function(cb) { return cb.checked; }).length;
+  var all = document.getElementById('serve-all');
+  all.checked = boxes.length > 0 && on === boxes.length;
+  all.indeterminate = on > 0 && on < boxes.length;
+}
+
+function serveAll(box) {
+  var enabled = box.checked;
+  var boxes = serveBoxes().filter(function(cb) { return cb.checked !== enabled; });
+  if (!boxes.length) return;
+  if (!confirm((enabled ? 'Serve optimized tools for ' : 'Serve original tools for ') + boxes.length + ' server(s)?')) {
+    syncServeAll();
+    return;
+  }
+  Promise.all(boxes.map(function(cb) { cb.checked = enabled; return toggleServe(cb.dataset.id, enabled); }))
+    .then(syncServeAll);
+}
+
+function setServing(enabled) {
+  var ids = selectedIDs();
+  if (!ids.length) { alert('Select at least one server.'); return; }
+  Promise.all(ids.map(function(id) { return toggleServe(id, enabled); }))
+    .then(function() { location.reload(); });
+}
+
+var polling = false;
+function pollUntilDone() {
+  if (polling) return;
+  polling = true;
+  var timer = setInterval(function() {
+    fetch('/optimize/status', {headers: {'Accept': 'application/json'}})
+      .then(function(r) {
+        var ct = r.headers.get('Content-Type') || '';
+        if (!r.ok || ct.indexOf('application/json') === -1) throw new Error('status ' + r.status);
+        return r.json();
+      })
+      .then(function(rows) {
+        var busy = false;
+        rows.forEach(function(row) {
+          if (row.in_flight) busy = true;
+          var tr = document.querySelector('tr[data-id="' + row.id + '"]');
+          if (!tr) return;
+          var badge = tr.querySelector('.status-cell .badge');
+          if (badge && row.in_flight) { badge.textContent = row.status; badge.className = 'badge badge-starting'; }
+        });
+        if (!busy) { clearInterval(timer); location.reload(); }
+      })
+      .catch(function() { clearInterval(timer); location.reload(); });
+  }, 3000);
+}
+
+syncServeAll();
+{{range .Rows}}{{if .InFlight}}pollUntilDone();{{break}}{{end}}{{end}}
+</script>
+{{end}}

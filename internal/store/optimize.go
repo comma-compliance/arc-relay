@@ -98,6 +98,19 @@ func (s *OptimizeStore) SetStatus(serverID, status, errorMsg string) error {
 	return err
 }
 
+// ResetInFlight marks jobs left pending or running by a previous process as
+// errored, so they don't block new runs after a restart.
+func (s *OptimizeStore) ResetInFlight() (int64, error) {
+	res, err := s.db.Exec(`
+		UPDATE tool_optimizations SET status = 'error', error_msg = 'interrupted by restart', updated_at = ?
+		WHERE status IN ('pending', 'running')
+	`, time.Now())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // MarkStale marks the optimization as stale if the tools hash has changed.
 func (s *OptimizeStore) MarkStale(serverID, currentHash string) (bool, error) {
 	opt, err := s.Get(serverID)

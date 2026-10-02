@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/comma-compliance/arc-relay/internal/llm"
 )
@@ -15,6 +17,9 @@ import (
 // PromptVersion is a hash identifier for the current system prompt.
 // Bump this when the prompt changes to invalidate cached optimizations.
 const PromptVersion = "v1.1"
+
+// batchConcurrency caps concurrent LLM calls within one server's optimization.
+const batchConcurrency = 4
 
 // OptimizerSystemPrompt is the system prompt used for LLM-based tool optimization.
 const OptimizerSystemPrompt = `You optimize MCP tool metadata for LLM use. Compress descriptions and JSON Schemas without changing tool behavior, decision boundaries, or required semantics.
@@ -229,17 +234,34 @@ func OptimizeTools(ctx context.Context, client *llm.Client, tools []Tool) ([]Too
 	// Batch tools by character budget so large schemas don't overflow output tokens.
 	// Target ~30K input chars per batch - the LLM output will be smaller after compression.
 	const charBudget = 30000
-	var optimized []Tool
 	batches := batchBySize(pruned, charBudget)
 
+	// Run batches concurrently; results are reassembled in batch order.
+	results := make([][]Tool, len(batches))
+	errs := make([]error, len(batches))
+	sem := make(chan struct{}, batchConcurrency)
+	var wg sync.WaitGroup
 	for batchIdx, batch := range batches {
-		_ = batchIdx
-
-		result, err := optimizeBatch(ctx, client, batch)
-		if err != nil {
-			return nil, fmt.Errorf("optimizing batch %d (%d tools): %w", batchIdx+1, len(batch), err)
-		}
-		optimized = append(optimized, result...)
+		wg.Add(1)
+		go func(batchIdx int, batch []Tool) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			result, err := optimizeBatch(ctx, client, batch)
+			if err != nil {
+				errs[batchIdx] = fmt.Errorf("optimizing batch %d of %d (%d tools): %w", batchIdx+1, len(batches), len(batch), err)
+				return
+			}
+			results[batchIdx] = result
+		}(batchIdx, batch)
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	var optimized []Tool
+	for _, r := range results {
+		optimized = append(optimized, r...)
 	}
 
 	// Verify all tools are accounted for with no duplicates

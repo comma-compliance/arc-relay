@@ -174,3 +174,40 @@ func TestServerStore_OptimizeEnabled(t *testing.T) {
 		t.Error("Expected OptimizeEnabled=false after disable")
 	}
 }
+
+func TestOptimizeStore_ResetInFlight(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	s := store.NewOptimizeStore(db)
+	serverStore := store.NewServerStore(db, store.NewConfigEncryptor(""))
+
+	statuses := []string{"pending", "running", "ready"}
+	ids := make([]string, len(statuses))
+	for i, status := range statuses {
+		srv := &store.Server{Name: "srv-" + status, ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
+		if err := serverStore.Create(srv); err != nil {
+			t.Fatalf("Create server: %v", err)
+		}
+		ids[i] = srv.ID
+		if err := s.Upsert(&store.ToolOptimization{ServerID: srv.ID, OptimizedTools: json.RawMessage(`[]`), Status: status}); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+
+	n, err := s.ResetInFlight()
+	if err != nil {
+		t.Fatalf("ResetInFlight: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("reset %d rows, want 2", n)
+	}
+	want := []string{"error", "error", "ready"}
+	for i, id := range ids {
+		opt, err := s.Get(id)
+		if err != nil || opt == nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if opt.Status != want[i] {
+			t.Errorf("%s: status %q, want %q", statuses[i], opt.Status, want[i])
+		}
+	}
+}

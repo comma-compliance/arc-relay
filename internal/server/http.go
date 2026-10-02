@@ -18,6 +18,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/optimizer"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/web"
@@ -41,12 +42,13 @@ type Server struct {
 	oauthTokenStore *store.OAuthTokenStore
 	optimizeStore   *store.OptimizeStore
 	llmClient       *llm.Client
+	optimizeRunner  *optimizer.Runner
 	optimizer       *middleware.Optimizer
 	mux             *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, optimizeRunner *optimizer.Runner) *Server {
 	s := &Server{
 		cfg:             cfg,
 		servers:         servers,
@@ -64,6 +66,7 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		oauthTokenStore: oauthTokenStore,
 		optimizeStore:   optimizeStore,
 		llmClient:       llmClient,
+		optimizeRunner:  optimizeRunner,
 		optimizer:       middleware.NewOptimizer(optimizeStore, servers),
 		mux:             http.NewServeMux(),
 	}
@@ -90,7 +93,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore, s.optimizeStore, s.llmClient)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore, s.optimizeStore, s.llmClient, s.optimizeRunner)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }
@@ -943,8 +946,8 @@ func (s *Server) getToolAudit(w http.ResponseWriter, r *http.Request, id string)
 		if err == nil && opt != nil {
 			audit.HasOptimized = true
 			audit.Status = opt.Status
-			audit.IsStale = opt.Status == "stale"
-			if opt.Status == "ready" || opt.Status == "stale" {
+			audit.IsStale = opt.Status == "stale" || opt.ToolsHash != toolsHash
+			if opt.OptimizedChars > 0 { // stored result, also kept across a re-run
 				audit.OptimizedChars = opt.OptimizedChars
 				if totalChars > 0 {
 					audit.SavingsPercent = float64(totalChars-opt.OptimizedChars) / float64(totalChars) * 100
@@ -963,101 +966,37 @@ func (s *Server) runOptimize(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 
-	if s.llmClient == nil || !s.llmClient.Available() {
-		http.Error(w, `{"error":"LLM client not configured (set ARC_RELAY_LLM_API_KEY)"}`, http.StatusServiceUnavailable)
-		return
-	}
-
 	srv, err := s.servers.Get(id)
 	if err != nil || srv == nil {
 		http.Error(w, `{"error":"server not found"}`, http.StatusNotFound)
 		return
 	}
 
-	endpoints := s.proxy.Endpoints.Get(id)
-	if endpoints == nil || len(endpoints.Tools) == 0 {
-		http.Error(w, `{"error":"no tools cached - start and enumerate the server first"}`, http.StatusBadRequest)
+	var tools []mcp.Tool
+	if endpoints := s.proxy.Endpoints.Get(id); endpoints != nil {
+		tools = endpoints.Tools
+	}
+
+	if err := s.optimizeRunner.Start(id, srv.Name, tools); err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, optimizer.ErrNoLLM):
+			status = http.StatusServiceUnavailable
+		case errors.Is(err, optimizer.ErrNoTools):
+			status = http.StatusBadRequest
+		case errors.Is(err, optimizer.ErrAlreadyRunning):
+			status = http.StatusConflict
+		default:
+			slog.Error("failed to start optimization", "server_id", id, "err", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
-
-	// Check for concurrent run
-	if s.optimizeStore != nil {
-		existing, err := s.optimizeStore.Get(id)
-		if err == nil && existing != nil && existing.Status == "running" {
-			http.Error(w, `{"error":"optimization already in progress"}`, http.StatusConflict)
-			return
-		}
-	}
-
-	// Mark as running
-	tools := endpoints.Tools
-	toolsHash := mcp.HashTools(tools)
-	_, totalChars := mcp.AuditTools(tools)
-
-	if err := s.optimizeStore.Upsert(&store.ToolOptimization{
-		ServerID:      id,
-		ToolsHash:     toolsHash,
-		OriginalChars: totalChars,
-		Status:        "running",
-		PromptVersion: mcp.PromptVersion,
-		Model:         s.llmClient.Model(),
-	}); err != nil {
-		slog.Error("failed to mark optimization as running", "server_id", id, "err", err)
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// Run optimization in background
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-
-		optimized, err := mcp.OptimizeTools(ctx, s.llmClient, tools)
-		if err != nil {
-			slog.Error("tool optimization failed", "server_id", id, "server", srv.Name, "err", err)
-			_ = s.optimizeStore.SetStatus(id, "error", err.Error())
-			return
-		}
-
-		optimizedJSON, err := json.Marshal(optimized)
-		if err != nil {
-			slog.Error("failed to marshal optimized tools", "server_id", id, "err", err)
-			_ = s.optimizeStore.SetStatus(id, "error", "marshal error: "+err.Error())
-			return
-		}
-
-		optChars := 0
-		for _, t := range optimized {
-			optChars += len(t.Description) + len(t.InputSchema)
-		}
-
-		if err := s.optimizeStore.Upsert(&store.ToolOptimization{
-			ServerID:       id,
-			ToolsHash:      toolsHash,
-			OriginalChars:  totalChars,
-			OptimizedChars: optChars,
-			OptimizedTools: optimizedJSON,
-			PromptVersion:  mcp.PromptVersion,
-			Model:          s.llmClient.Model(),
-			Status:         "ready",
-		}); err != nil {
-			slog.Error("failed to save optimization result", "server_id", id, "err", err)
-			return
-		}
-
-		savings := 0.0
-		if totalChars > 0 {
-			savings = float64(totalChars-optChars) / float64(totalChars) * 100
-		}
-		slog.Info("tool optimization complete",
-			"server_id", id, "server", srv.Name,
-			"tools", len(optimized),
-			"original_chars", totalChars, "optimized_chars", optChars,
-			"savings_percent", fmt.Sprintf("%.1f%%", savings),
-		)
-	}()
 
 	w.Header().Set("Content-Type", "application/json")
+	// "running" is kept for API compatibility; the job may briefly be queued.
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
 }
 
