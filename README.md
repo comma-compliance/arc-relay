@@ -83,6 +83,7 @@ Arc Relay reads a TOML config file with environment variable overrides. See [`co
 | `ARC_RELAY_BASE_URL` | Public URL for OAuth callbacks |
 | `ARC_RELAY_LLM_API_KEY` | Anthropic API key for tool context optimization (optional) |
 | `ARC_RELAY_LLM_MODEL` | LLM model for optimization (default: `claude-haiku-4-5-20251001`) |
+| `ARC_RELAY_LLM_TIMEOUT` | Per-request timeout for optimization calls, as a duration (`10m`) or seconds (`600`) (default: `5m`) |
 | `ARC_RELAY_SENTRY_DSN` | Sentry DSN for error reporting (optional; leave unset to disable Sentry) |
 
 ## User Onboarding
@@ -373,6 +374,8 @@ MCP servers often ship verbose tool definitions that consume excessive LLM conte
 **Without an LLM key:** Each server detail page shows a tool audit card with per-tool size breakdown and estimated token counts. No configuration needed.
 
 **With an LLM key:** Set `ARC_RELAY_LLM_API_KEY` to an [Anthropic API key](https://console.anthropic.com/) to enable LLM-powered optimization. Click "Run Optimization" on any server's detail page to compress tool descriptions. Review the savings, then toggle "Serve optimized tools" to start serving the compressed versions to clients.
+
+**Managing all servers:** The **Optimizer** page (`/optimize`, admin only) lists every server with its token counts, savings, status, model, and serving toggle. Select servers (or "Select needing a run" for ones whose tools changed, whose last run failed, or that were optimized with a different model) and optimize them in one go. Bulk runs process two servers at a time; each server's tool batches run up to four at a time. A re-run keeps serving the previous optimized tools until the new result is ready.
 
 ## Connect to Comma Compliance Arc
 

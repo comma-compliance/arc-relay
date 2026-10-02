@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -27,6 +26,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/optimizer"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
@@ -160,6 +160,7 @@ type Handlers struct {
 	inviteStore     *store.InviteStore
 	optimizeStore   *store.OptimizeStore
 	llmClient       *llm.Client
+	optimizeRunner  *optimizer.Runner
 	oauthProv       *oauthProvider
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
@@ -167,7 +168,7 @@ type Handlers struct {
 	flashKeys       sync.Map // nonce -> raw API key (shown once after redirect)
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, optimizeRunner *optimizer.Runner) *Handlers {
 	// Generate a per-process CSRF secret. Use session_secret from config if set.
 	csrfSecret := []byte(cfg.Auth.SessionSecret)
 	if len(csrfSecret) == 0 {
@@ -195,6 +196,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		inviteStore:     inviteStore,
 		optimizeStore:   optimizeStore,
 		llmClient:       llmClient,
+		optimizeRunner:  optimizeRunner,
 		oauthProv:       newOAuthProvider(oauthTokenStore, store.NewOAuthClientStore(oauthTokenStore.DB()), store.NewOAuthRefreshTokenStore(oauthTokenStore.DB())),
 		tmpls:           make(map[string]*template.Template),
 		csrfSecret:      csrfSecret,
@@ -210,6 +212,13 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 			return *s
 		},
 		"add":      func(a, b int) int { return a + b },
+		"optBadge": optimizeStatusBadge,
+		"ago": func(t time.Time) string {
+			if t.IsZero() {
+				return "-"
+			}
+			return humanizeAge(t)
+		},
 		"subtract": func(a, b int) int { return a - b },
 		"commas": func(n int) string {
 			s := fmt.Sprintf("%d", n)
@@ -248,7 +257,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	// Parse each page template together with the layout and middleware partials.
 	// Middleware partials define named templates (e.g. "middleware_archive") that
 	// can be invoked from server_detail.html via {{callTemplate .TemplateName .}}.
-	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html", "connect_desktop.html", "change_password.html"}
+	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html", "connect_desktop.html", "change_password.html", "optimize.html"}
 	for _, page := range pages {
 		t := template.New("").Funcs(funcMap)
 		// Add callTemplate func that captures this template set for dynamic dispatch.
@@ -313,6 +322,8 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/servers/new", h.requireAuth(h.handleServerNew))
 	mux.HandleFunc("/servers/", h.requireAuth(h.handleServerRoutes))
 	mux.HandleFunc("/logs", h.requireAuth(h.handleLogs))
+	mux.HandleFunc("/optimize", h.requireAuth(h.handleOptimizeRoutes))
+	mux.HandleFunc("/optimize/", h.requireAuth(h.handleOptimizeRoutes))
 	mux.HandleFunc("/users", h.requireAuth(h.handleUsers))
 	mux.HandleFunc("/users/", h.requireAuth(h.handleUserRoutes))
 	mux.HandleFunc("/api-keys", h.requireAuth(h.handleAPIKeys))
@@ -896,7 +907,10 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			auditData["IsStale"] = opt.ToolsHash != toolsHash
 			auditData["Model"] = opt.Model
 			auditData["ErrorMsg"] = opt.ErrorMsg
-			if opt.Status == "ready" || opt.Status == "stale" {
+			// A stored result stays in use across a pending, running or failed re-run.
+			hasResult := opt.OptimizedChars > 0
+			auditData["HasResult"] = hasResult
+			if hasResult {
 				auditData["OptimizedChars"] = opt.OptimizedChars
 				auditData["OptimizedTokens"] = opt.OptimizedChars / 4
 				if totalChars > 0 {
@@ -3246,79 +3260,36 @@ func (h *Handlers) handleServerOptimize(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	if h.llmClient == nil || !h.llmClient.Available() {
-		w.Header().Set("Content-Type", "application/json")
-		http.Error(w, `{"error":"LLM API key not configured (set ARC_RELAY_LLM_API_KEY)"}`, http.StatusServiceUnavailable)
+	srv, err := h.servers.Get(id)
+	if err != nil || srv == nil {
+		http.Error(w, `{"error":"server not found"}`, http.StatusNotFound)
 		return
 	}
 
-	if existing, err := h.optimizeStore.Get(id); err == nil && existing != nil && existing.Status == "running" {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "running", "message": "Optimization already in progress"})
-		return
+	var tools []mcp.Tool
+	if endpoints := h.proxy.Endpoints.Get(id); endpoints != nil {
+		tools = endpoints.Tools
 	}
-
-	endpoints := h.proxy.Endpoints.Get(id)
-	if endpoints == nil || len(endpoints.Tools) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		http.Error(w, `{"error":"no tools available - server may not be running"}`, http.StatusNotFound)
-		return
-	}
-
-	toolsHash := mcp.HashTools(endpoints.Tools)
-	_, originalChars := mcp.AuditTools(endpoints.Tools)
-
-	if err := h.optimizeStore.Upsert(&store.ToolOptimization{
-		ServerID:       id,
-		ToolsHash:      toolsHash,
-		OriginalChars:  originalChars,
-		OptimizedChars: 0,
-		OptimizedTools: json.RawMessage("[]"),
-		PromptVersion:  mcp.PromptVersion,
-		Model:          h.llmClient.Model(),
-		Status:         "running",
-	}); err != nil {
-		slog.Error("optimize: failed to save running status", "server", id, "err", err)
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-
-		optimized, err := mcp.OptimizeTools(ctx, h.llmClient, endpoints.Tools)
-		if err != nil {
-			slog.Error("optimize: failed", "server", id, "err", err)
-			_ = h.optimizeStore.SetStatus(id, "error", err.Error())
-			return
-		}
-
-		optimizedJSON, err := json.Marshal(optimized)
-		if err != nil {
-			slog.Error("optimize: failed to marshal result", "server", id, "err", err)
-			_ = h.optimizeStore.SetStatus(id, "error", err.Error())
-			return
-		}
-
-		_, optimizedChars := mcp.AuditTools(optimized)
-		if err := h.optimizeStore.Upsert(&store.ToolOptimization{
-			ServerID:       id,
-			ToolsHash:      toolsHash,
-			OriginalChars:  originalChars,
-			OptimizedChars: optimizedChars,
-			OptimizedTools: optimizedJSON,
-			PromptVersion:  mcp.PromptVersion,
-			Model:          h.llmClient.Model(),
-			Status:         "ready",
-		}); err != nil {
-			slog.Error("optimize: failed to save result", "server", id, "err", err)
-		} else {
-			slog.Info("optimize: completed", "server", id,
-				"original", originalChars, "optimized", optimizedChars,
-				"reduction_pct", int(float64(originalChars-optimizedChars)/float64(originalChars)*100))
-		}
-	}()
 
 	w.Header().Set("Content-Type", "application/json")
+	if err := h.optimizeRunner.Start(id, srv.Name, tools); err != nil {
+		if errors.Is(err, optimizer.ErrAlreadyRunning) {
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "running", "message": err.Error()})
+			return
+		}
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, optimizer.ErrNoLLM):
+			status = http.StatusServiceUnavailable
+		case errors.Is(err, optimizer.ErrNoTools):
+			status = http.StatusNotFound
+		default:
+			slog.Error("optimize: failed to start", "server", id, "err", err)
+		}
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "running", "message": "Optimization started"})
 }
 
@@ -3374,7 +3345,7 @@ func (h *Handlers) handleServerToolAudit(w http.ResponseWriter, r *http.Request,
 		audit.HasOptimized = true
 		audit.Status = opt.Status
 		audit.IsStale = opt.ToolsHash != toolsHash
-		if (opt.Status == "ready" || opt.Status == "stale") && totalChars > 0 {
+		if opt.OptimizedChars > 0 && totalChars > 0 {
 			audit.OptimizedChars = opt.OptimizedChars
 			audit.SavingsPercent = float64(totalChars-opt.OptimizedChars) / float64(totalChars) * 100
 		}

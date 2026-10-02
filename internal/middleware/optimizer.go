@@ -10,7 +10,8 @@ import (
 )
 
 // Optimizer middleware swaps in optimized tool definitions on tools/list responses.
-// It only activates for servers that have optimize_enabled=true and a ready optimization.
+// It only activates for servers that have optimize_enabled=true and a stored
+// optimization whose tools hash still matches the live tools.
 type Optimizer struct {
 	optimizeStore *store.OptimizeStore
 	serverStore   *store.ServerStore
@@ -42,9 +43,10 @@ func (o *Optimizer) ProcessResponse(_ context.Context, _ *mcp.Request, resp *mcp
 		return resp, nil
 	}
 
-	// Get the optimization record
+	// Get the optimization record. A pending/running/failed re-run keeps the
+	// previous result, which is still served while its tools hash matches.
 	opt, err := o.optimizeStore.Get(meta.ServerID)
-	if err != nil || opt == nil || opt.Status != "ready" {
+	if err != nil || opt == nil || opt.Status == "stale" || len(opt.OptimizedTools) == 0 {
 		return resp, nil
 	}
 
@@ -65,8 +67,11 @@ func (o *Optimizer) ProcessResponse(_ context.Context, _ *mcp.Request, resp *mcp
 	if liveHash != opt.ToolsHash {
 		log.Printf("optimizer: tools hash mismatch for %s (live=%s, opt=%s) - serving original",
 			meta.ServerName, liveHash[:12], opt.ToolsHash[:12])
-		// Mark stale in background (best-effort)
-		go func() { _, _ = o.optimizeStore.MarkStale(meta.ServerID, liveHash) }()
+		// Mark stale in background (best-effort). Only ready rows can go stale;
+		// pending/running/error rows keep their status.
+		if opt.Status == "ready" {
+			go func() { _, _ = o.optimizeStore.MarkStale(meta.ServerID, liveHash) }()
+		}
 		return resp, nil
 	}
 
