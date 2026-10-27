@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/google/uuid"
 )
@@ -101,6 +102,7 @@ func (s *oauthAuthCodeStore) consume(code string) *oauthAuthCode {
 }
 
 func (s *oauthAuthCodeStore) cleanup() {
+	defer safego.Recover("oauth code cleanup")
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {

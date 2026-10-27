@@ -28,6 +28,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/optimizer"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -118,6 +119,7 @@ func (rl *loginRateLimiter) record(ip string) {
 }
 
 func (rl *loginRateLimiter) cleanup() {
+	defer safego.Recover("login rate limiter cleanup")
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -294,7 +296,7 @@ func (h *Handlers) StartSessionCleanup(interval time.Duration) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			h.sessionStore.Cleanup()
+			safego.Run("session cleanup", h.sessionStore.Cleanup)
 		}
 	}()
 }

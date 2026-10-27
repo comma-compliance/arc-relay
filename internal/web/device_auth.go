@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/comma-compliance/arc-relay/internal/safego"
 )
 
 // deviceAuthRequest represents a pending device authorization request.
@@ -133,6 +135,7 @@ func (s *deviceAuthStore) consume(deviceCode string) *deviceAuthRequest {
 
 // cleanup removes expired requests periodically.
 func (s *deviceAuthStore) cleanup() {
+	defer safego.Recover("device auth cleanup")
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {

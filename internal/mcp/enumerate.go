@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -20,6 +21,23 @@ type ServerEndpoints struct {
 // Sender is the interface for sending MCP requests (matches proxy.Backend).
 type Sender interface {
 	Send(ctx context.Context, req *Request) (*Response, error)
+}
+
+// ErrNilResponse is returned when a Sender reports success but hands back no
+// response. That is a Sender bug; callers treat it as a failed request rather
+// than dereferencing nil.
+var ErrNilResponse = errors.New("sender returned no response and no error")
+
+// send wraps sender.Send and turns a (nil, nil) result into ErrNilResponse.
+func send(ctx context.Context, sender Sender, req *Request) (*Response, error) {
+	resp, err := sender.Send(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("%s: %w", req.Method, ErrNilResponse)
+	}
+	return resp, nil
 }
 
 // EndpointCache stores enumerated endpoints for all servers.
@@ -119,7 +137,7 @@ func doInitialize(ctx context.Context, sender Sender) (*InitializeResult, error)
 		return nil, err
 	}
 
-	resp, err := sender.Send(ctx, req)
+	resp, err := send(ctx, sender, req)
 	if err != nil {
 		return nil, fmt.Errorf("sending initialize: %w", err)
 	}
@@ -146,7 +164,7 @@ func doListTools(ctx context.Context, sender Sender) ([]Tool, error) {
 		return nil, err
 	}
 
-	resp, err := sender.Send(ctx, req)
+	resp, err := send(ctx, sender, req)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +186,7 @@ func doListResources(ctx context.Context, sender Sender) ([]Resource, error) {
 		return nil, err
 	}
 
-	resp, err := sender.Send(ctx, req)
+	resp, err := send(ctx, sender, req)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +208,7 @@ func doListPrompts(ctx context.Context, sender Sender) ([]Prompt, error) {
 		return nil, err
 	}
 
-	resp, err := sender.Send(ctx, req)
+	resp, err := send(ctx, sender, req)
 	if err != nil {
 		return nil, err
 	}

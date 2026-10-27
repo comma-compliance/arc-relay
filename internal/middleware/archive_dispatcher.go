@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -142,6 +143,7 @@ func (d *ArchiveDispatcher) EnqueueWithServer(payload []byte, cfg ArchiveConfig,
 
 func (d *ArchiveDispatcher) loop() {
 	defer close(d.doneCh)
+	defer safego.Recover("archive dispatcher")
 
 	// Startup replay
 	d.drainDue()

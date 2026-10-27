@@ -13,6 +13,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/comma-compliance/arc-relay/internal/safego"
 )
 
 type DB struct {
@@ -66,7 +68,7 @@ func (db *DB) StartBackup(interval time.Duration) {
 		for {
 			select {
 			case <-ticker.C:
-				db.runBackup()
+				safego.Run("db backup", db.runBackup)
 			case <-db.stopCh:
 				return
 			}

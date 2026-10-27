@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/comma-compliance/arc-relay/internal/safego"
 )
 
 type rateBucket struct {
@@ -58,6 +60,7 @@ func (rl *RateLimiter) allow(key string) bool {
 
 // cleanup removes stale buckets every 5 minutes.
 func (rl *RateLimiter) cleanup() {
+	defer safego.Recover("rate limiter cleanup")
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {

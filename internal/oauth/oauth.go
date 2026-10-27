@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -79,6 +80,7 @@ func NewManager(servers *store.ServerStore, baseURL string) *Manager {
 
 // cleanupPendingLoop periodically removes expired pending OAuth flows.
 func (m *Manager) cleanupPendingLoop() {
+	defer safego.Recover("oauth pending cleanup")
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {

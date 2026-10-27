@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -177,6 +178,7 @@ func (a *Alerter) fireAlert(rule compiledRule, meta *RequestMeta, summary string
 }
 
 func (a *Alerter) sendWebhook(url, summary string, meta *RequestMeta) {
+	defer safego.Recover("alert webhook")
 	payload := map[string]string{
 		"text":       summary,
 		"server":     meta.ServerName,

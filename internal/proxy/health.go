@@ -11,6 +11,7 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -65,7 +66,8 @@ func (hm *HealthMonitor) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				hm.checkAll(ctx)
+				// A panic in one check must not stop health monitoring.
+				safego.Run("health check", func() { hm.checkAll(ctx) })
 			case <-ctx.Done():
 				return
 			}
@@ -208,6 +210,7 @@ func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
 	hm.mu.Unlock()
 
 	go func() {
+		defer safego.Recover("health recovery " + srv.Name)
 		defer func() {
 			hm.mu.Lock()
 			delete(hm.recovering, srv.ID)
