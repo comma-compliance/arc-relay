@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -71,12 +72,20 @@ func (fc *fakeContainer) sendAsync(t *testing.T, ctx context.Context, req *mcp.R
 		resp, err := fc.bridge.Send(ctx, req)
 		out <- sendResult{resp, err}
 	}()
+	fc.nextRequest(t)
+	return out
+}
+
+// nextRequest waits for the next request to reach the container's stdin.
+func (fc *fakeContainer) nextRequest(t *testing.T) *mcp.Request {
+	t.Helper()
 	select {
-	case <-fc.requests:
+	case req := <-fc.requests:
+		return req
 	case <-time.After(2 * time.Second):
 		t.Fatal("request never reached container stdin")
+		return nil
 	}
-	return out
 }
 
 func waitResult(t *testing.T, ch <-chan sendResult) sendResult {
@@ -92,13 +101,78 @@ func waitResult(t *testing.T, ch <-chan sendResult) sendResult {
 
 func TestStdioBridgeRoundTrip(t *testing.T) {
 	fc := newFakeContainer(t)
-	ch := fc.sendAsync(t, context.Background(), pingRequest(t, 1))
-	if _, err := io.WriteString(fc.stdoutW, `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n"); err != nil {
+	out := make(chan sendResult, 1)
+	go func() {
+		resp, err := fc.bridge.Send(context.Background(), pingRequest(t, 42))
+		out <- sendResult{resp, err}
+	}()
+	req := fc.nextRequest(t)
+	if _, err := fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", req.ID); err != nil {
 		t.Fatal(err)
 	}
-	r := waitResult(t, ch)
+	r := waitResult(t, out)
 	if r.err != nil || r.resp == nil {
 		t.Fatalf("got resp=%v err=%v, want a response", r.resp, r.err)
+	}
+	if string(r.resp.ID) != "42" {
+		t.Errorf("response id = %s, want the caller's id 42", r.resp.ID)
+	}
+}
+
+// Two clients sharing one stdio server both use id 1 (most clients start
+// there). Each must get its own response; before the fix one client got the
+// other's result and the second hung until its deadline.
+func TestStdioBridgeSameClientIDsDoNotCollide(t *testing.T) {
+	fc := newFakeContainer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	callAs := func(who string) *mcp.Request {
+		id, _ := json.Marshal(1)
+		req, err := mcp.NewRequest(id, "tools/call", map[string]string{"who": who})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+	type result struct {
+		who  string
+		resp *mcp.Response
+		err  error
+	}
+	out := make(chan result, 2)
+	for _, who := range []string{"alice", "bob"} {
+		go func(who string) {
+			resp, err := fc.bridge.Send(ctx, callAs(who))
+			out <- result{who, resp, err}
+		}(who)
+	}
+
+	// The server sees both requests, then answers each under the id it was
+	// given, echoing who asked.
+	reqs := []*mcp.Request{fc.nextRequest(t), fc.nextRequest(t)}
+	if string(reqs[0].ID) == string(reqs[1].ID) {
+		t.Fatalf("both requests reached the server with id %s", reqs[0].ID)
+	}
+	for _, req := range reqs {
+		var p map[string]string
+		_ = json.Unmarshal(req.Params, &p)
+		_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{"who":%q}}`+"\n", req.ID, p["who"])
+	}
+
+	for i := 0; i < 2; i++ {
+		r := <-out
+		if r.err != nil {
+			t.Fatalf("%s: %v", r.who, r.err)
+		}
+		var got map[string]string
+		_ = json.Unmarshal(r.resp.Result, &got)
+		if got["who"] != r.who {
+			t.Errorf("%s received %s's response", r.who, got["who"])
+		}
+		if string(r.resp.ID) != "1" {
+			t.Errorf("%s: response id = %s, want the caller's id 1", r.who, r.resp.ID)
+		}
 	}
 }
 
@@ -214,4 +288,27 @@ type signalingWriter struct {
 func (w *signalingWriter) Write(p []byte) (int, error) {
 	w.once.Do(func() { close(w.started) })
 	return w.PipeWriter.Write(p)
+}
+
+// A server-initiated request (here roots/list) can reuse an id that a pending
+// call is using on the wire. It must not be delivered as that call's response.
+func TestStdioBridgeIgnoresServerRequests(t *testing.T) {
+	fc := newFakeContainer(t)
+	out := make(chan sendResult, 1)
+	go func() {
+		resp, err := fc.bridge.Send(context.Background(), pingRequest(t, 1))
+		out <- sendResult{resp, err}
+	}()
+	req := fc.nextRequest(t)
+	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":"roots/list"}`+"\n", req.ID)
+	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":null}`+"\n", req.ID)
+	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{"real":true}}`+"\n", req.ID)
+
+	r := waitResult(t, out)
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if string(r.resp.Result) != `{"real":true}` {
+		t.Fatalf("got result %s, want the real response", r.resp.Result)
+	}
 }
