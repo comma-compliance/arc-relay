@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/comma-compliance/arc-relay/internal/llm"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 )
 
 // PromptVersion is a hash identifier for the current system prompt.
@@ -248,6 +249,9 @@ func OptimizeTools(ctx context.Context, client *llm.Client, tools []Tool) ([]Too
 		wg.Add(1)
 		go func(batchIdx int, batch []Tool) {
 			defer wg.Done()
+			// A panicking batch leaves its slot empty, which the tool-count
+			// check below reports as a failed run.
+			defer safego.Recover("optimize batch")
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():

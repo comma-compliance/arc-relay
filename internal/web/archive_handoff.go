@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/middleware"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -91,6 +92,7 @@ func (s *archiveHandoffStore) consume(nonce, userID string) bool {
 
 // cleanup removes expired requests periodically.
 func (s *archiveHandoffStore) cleanup() {
+	defer safego.Recover("archive handoff cleanup")
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {

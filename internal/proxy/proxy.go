@@ -16,6 +16,7 @@ import (
 	dockermgr "github.com/comma-compliance/arc-relay/internal/docker"
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -428,6 +429,7 @@ func (m *Manager) syncAccessTiers(serverID string, endpoints *mcp.ServerEndpoint
 // enumerateAsync runs enumeration in a background goroutine after server start.
 func (m *Manager) enumerateAsync(serverID, serverName string) {
 	go func() {
+		defer safego.Recover("enumerate " + serverName)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 

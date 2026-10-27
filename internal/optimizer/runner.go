@@ -11,6 +11,7 @@ import (
 
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -105,6 +106,7 @@ func (r *Runner) Start(serverID, serverName string, tools []mcp.Tool) error {
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
+		defer safego.Recover("optimize runner " + serverName)
 		r.run(serverID, serverName, tools, toolsHash, originalChars)
 	}()
 	return nil

@@ -20,6 +20,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/optimizer"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/web"
 )
@@ -358,6 +359,9 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := backend.Send(r.Context(), &mcpReq)
 	durationMs := time.Since(startTime).Milliseconds()
+	if err == nil && resp == nil {
+		err = fmt.Errorf("%s: %w", mcpReq.Method, mcp.ErrNilResponse)
+	}
 
 	if err != nil {
 		slog.Error("error proxying to server", "server", serverName, "err", err)
@@ -411,6 +415,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 // logRequest writes a request log entry in the background.
 func (s *Server) logRequest(user *store.User, serverID, method, endpointName string, durationMs int64, status, errMsg string) {
+	defer safego.Recover("request log")
 	rl := &store.RequestLog{
 		ServerID:     serverID,
 		Method:       method,

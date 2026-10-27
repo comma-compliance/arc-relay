@@ -20,6 +20,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/optimizer"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/migrations"
@@ -134,6 +135,7 @@ func main() {
 
 	// Auto-start all configured servers
 	go func() {
+		defer safego.Recover("auto-start servers")
 		servers, err := serverStore.List()
 		if err != nil {
 			slog.Warn("failed to list servers for auto-start", "err", err)
@@ -168,8 +170,10 @@ func main() {
 		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			oauthTokenStore.Cleanup()
-			oauthRefreshStore.Cleanup()
+			safego.Run("oauth token cleanup", func() {
+				oauthTokenStore.Cleanup()
+				oauthRefreshStore.Cleanup()
+			})
 		}
 	}()
 

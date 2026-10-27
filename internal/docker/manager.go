@@ -16,6 +16,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/comma-compliance/arc-relay/internal/safego"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -232,6 +233,7 @@ func (m *Manager) AttachStdio(ctx context.Context, containerID string) (io.Write
 	// Demux the Docker multiplexed stream into clean stdout/stderr pipes
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
+		defer safego.Recover("docker demux")
 		_, err := stdcopy.StdCopy(stdoutW, io.Discard, resp.Reader)
 		if err != nil {
 			slog.Error("docker demux error", "container", containerID[:12], "error", err)
@@ -349,6 +351,7 @@ func (m *Manager) BuildImageFromContext(ctx context.Context, contextDir, dockerf
 	ignorePatterns := parseDockerignore(contextDir)
 
 	go func() {
+		defer safego.Recover("docker build context")
 		tw := tar.NewWriter(pw)
 		err := tarDirectory(tw, contextDir, ignorePatterns)
 		_ = tw.Close()

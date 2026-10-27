@@ -23,7 +23,7 @@ jobs:
         run: CGO_ENABLED=1 go build ./cmd/arc-relay
 
       - name: Test server packages
-        run: CGO_ENABLED=1 go test -race -count=1 ./internal/catalog/... ./internal/config/... ./internal/docker/... ./internal/mcp/... ./internal/middleware/... ./internal/oauth/... ./internal/proxy/... ./internal/server/... ./internal/store/... ./internal/testutil/... ./internal/web/...
+        run: CGO_ENABLED=1 go test -race -count=1 ./internal/catalog/... ./internal/config/... ./internal/docker/... ./internal/mcp/... ./internal/middleware/... ./internal/oauth/... ./internal/proxy/... ./internal/safego/... ./internal/server/... ./internal/store/... ./internal/testutil/... ./internal/web/...
 
   build-cli:
     strategy:
