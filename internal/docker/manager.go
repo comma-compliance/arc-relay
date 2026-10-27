@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -234,11 +235,12 @@ func (m *Manager) AttachStdio(ctx context.Context, containerID string) (io.Write
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
 		defer safego.Recover("docker demux")
+		// Deferred so the bridge's reader sees EOF even after a panic.
+		defer func() { _ = stdoutW.Close() }()
 		_, err := stdcopy.StdCopy(stdoutW, io.Discard, resp.Reader)
 		if err != nil {
 			slog.Error("docker demux error", "container", containerID[:12], "error", err)
 		}
-		_ = stdoutW.Close()
 	}()
 
 	return resp.Conn, stdoutR, nil
@@ -352,10 +354,13 @@ func (m *Manager) BuildImageFromContext(ctx context.Context, contextDir, dockerf
 
 	go func() {
 		defer safego.Recover("docker build context")
+		// Deferred so ImageBuild sees an error rather than waiting forever
+		// if tarring panics.
+		err := errors.New("building context archive panicked")
+		defer func() { pw.CloseWithError(err) }()
 		tw := tar.NewWriter(pw)
-		err := tarDirectory(tw, contextDir, ignorePatterns)
+		err = tarDirectory(tw, contextDir, ignorePatterns)
 		_ = tw.Close()
-		pw.CloseWithError(err)
 	}()
 
 	result, err := m.cli.ImageBuild(ctx, pr, dclient.ImageBuildOptions{

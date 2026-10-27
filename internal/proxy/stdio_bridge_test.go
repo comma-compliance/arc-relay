@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,4 +173,45 @@ func TestStdioBridgeSendAfterStreamEnded(t *testing.T) {
 	if resp != nil || !errors.Is(err, ErrBridgeClosed) {
 		t.Fatalf("got resp=%v err=%v, want nil and ErrBridgeClosed", resp, err)
 	}
+}
+
+// A container that stops reading stdin leaves Send blocked in Write. When its
+// stdout then ends, the bridge must close stdin so Send returns.
+func TestStdioBridgeStdoutEOFUnblocksWrite(t *testing.T) {
+	_, pipeW := io.Pipe() // nobody reads stdin, so Write blocks
+	stdin := &signalingWriter{PipeWriter: pipeW, started: make(chan struct{})}
+	stdoutR, stdoutW := io.Pipe()
+	bridge := NewStdioBridge(stdin, stdoutR)
+	t.Cleanup(func() { _ = bridge.Close() })
+
+	out := make(chan sendResult, 1)
+	go func() {
+		resp, err := bridge.Send(context.Background(), pingRequest(t, 1))
+		out <- sendResult{resp, err}
+	}()
+	// End stdout only once Send is inside Write, so the test exercises the
+	// blocked write rather than a Send that sees an already-closed bridge.
+	select {
+	case <-stdin.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Send never wrote to stdin")
+	}
+	_ = stdoutW.Close()
+
+	r := waitResult(t, out)
+	if r.resp != nil || !errors.Is(r.err, ErrBridgeClosed) {
+		t.Fatalf("got resp=%v err=%v, want nil and ErrBridgeClosed", r.resp, r.err)
+	}
+}
+
+// signalingWriter closes started when the first Write begins.
+type signalingWriter struct {
+	*io.PipeWriter
+	started chan struct{}
+	once    sync.Once
+}
+
+func (w *signalingWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	return w.PipeWriter.Write(p)
 }

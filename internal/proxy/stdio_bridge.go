@@ -57,8 +57,9 @@ func NewStdioBridge(stdin io.WriteCloser, stdout io.ReadCloser) *StdioBridge {
 func (b *StdioBridge) readLoop() {
 	defer safego.Recover("stdio bridge read loop")
 	// Whatever ends the loop, fail every waiting Send instead of leaving
-	// it to hang until its context expires.
-	defer b.markDone(nil)
+	// it to hang until its context expires. Close also closes stdin, which
+	// unblocks a Send stuck writing to a container that stopped reading.
+	defer func() { _ = b.Close() }()
 	for b.scanner.Scan() {
 		line := b.scanner.Bytes()
 		if len(line) == 0 {
@@ -74,16 +75,18 @@ func (b *StdioBridge) readLoop() {
 		// Match response to pending request by ID
 		if resp.ID != nil {
 			idKey := string(resp.ID)
+			// Deliver under the lock (ch is buffered, so this never blocks).
+			// Send relies on this: once it holds the lock, a response is
+			// either already in ch or will never arrive.
 			b.mu.Lock()
 			ch, ok := b.pending[idKey]
 			if ok {
 				delete(b.pending, idKey)
+				ch <- &resp
 			}
 			b.mu.Unlock()
 
-			if ok {
-				ch <- &resp
-			} else {
+			if !ok {
 				slog.Warn("stdio bridge: no pending request for response", "id", idKey)
 			}
 		}
@@ -150,6 +153,11 @@ func (b *StdioBridge) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 		b.mu.Lock()
 		delete(b.pending, idKey)
 		b.mu.Unlock()
+		select {
+		case <-b.done:
+			return nil, b.closedErr()
+		default:
+		}
 		return nil, fmt.Errorf("writing to stdin: %w", err)
 	}
 
@@ -164,7 +172,8 @@ func (b *StdioBridge) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 		b.mu.Lock()
 		delete(b.pending, idKey)
 		b.mu.Unlock()
-		// A response may have landed just before the stream ended.
+		// readLoop delivers under the lock, so a response that raced the
+		// close is already in ch by now.
 		select {
 		case resp := <-ch:
 			return resp, nil
