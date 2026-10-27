@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/safego"
@@ -24,8 +26,13 @@ type StdioBridge struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 
+	// nextID numbers requests on the wire. Clients pick their own JSON-RPC
+	// ids (most start at 1), so two clients sharing this bridge would
+	// otherwise collide in pending and receive each other's responses.
+	nextID atomic.Uint64
+
 	mu      sync.Mutex
-	pending map[string]chan *mcp.Response
+	pending map[string]chan *mcp.Response // keyed by wire id
 	scanner *bufio.Scanner
 	closed  bool  // guarded by mu
 	readErr error // guarded by mu; why the stdout stream ended, if known
@@ -69,6 +76,17 @@ func (b *StdioBridge) readLoop() {
 		var resp mcp.Response
 		if err := json.Unmarshal(line, &resp); err != nil {
 			slog.Warn("stdio bridge: failed to parse response", "err", err)
+			continue
+		}
+		// Requests and notifications from the server carry a method. They
+		// are not answers to our calls, and a server request's id must not
+		// be matched against a pending call that happens to share it.
+		var kind struct {
+			Method json.RawMessage `json:"method"` // nil only when absent
+		}
+		_ = json.Unmarshal(line, &kind)
+		if kind.Method != nil {
+			slog.Debug("stdio bridge: ignoring server-initiated message", "method", string(kind.Method))
 			continue
 		}
 
@@ -127,7 +145,11 @@ func (b *StdioBridge) closedErr() error {
 
 // Send sends an MCP request over stdio and waits for the response.
 func (b *StdioBridge) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, error) {
-	idKey := string(req.ID)
+	// Send under a bridge-unique id and restore the caller's id on the reply.
+	clientID := req.ID
+	wireReq := *req
+	wireReq.ID = json.RawMessage(strconv.FormatUint(b.nextID.Add(1), 10))
+	idKey := string(wireReq.ID)
 	ch := make(chan *mcp.Response, 1)
 
 	b.mu.Lock()
@@ -139,7 +161,7 @@ func (b *StdioBridge) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 	b.mu.Unlock()
 
 	// Serialize to JSON + newline
-	data, err := json.Marshal(req)
+	data, err := json.Marshal(&wireReq)
 	if err != nil {
 		b.mu.Lock()
 		delete(b.pending, idKey)
@@ -167,6 +189,7 @@ func (b *StdioBridge) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 	// which crashed enumeration with a nil pointer dereference.
 	select {
 	case resp := <-ch:
+		resp.ID = clientID
 		return resp, nil
 	case <-b.done:
 		b.mu.Lock()
@@ -176,6 +199,7 @@ func (b *StdioBridge) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 		// close is already in ch by now.
 		select {
 		case resp := <-ch:
+			resp.ID = clientID
 			return resp, nil
 		default:
 		}
