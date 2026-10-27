@@ -149,7 +149,7 @@ func TestStdioBridgeSameClientIDsDoNotCollide(t *testing.T) {
 	for _, req := range reqs {
 		var p map[string]string
 		_ = json.Unmarshal(req.Params, &p)
-		fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{"who":%q}}`+"\n", req.ID, p["who"])
+		_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{"who":%q}}`+"\n", req.ID, p["who"])
 	}
 
 	for i := 0; i < 2; i++ {
@@ -292,9 +292,9 @@ func TestStdioBridgeIgnoresServerRequests(t *testing.T) {
 		out <- sendResult{resp, err}
 	}()
 	req := <-fc.requests
-	fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":"roots/list"}`+"\n", req.ID)
-	fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":null}`+"\n", req.ID)
-	fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{"real":true}}`+"\n", req.ID)
+	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":"roots/list"}`+"\n", req.ID)
+	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":null}`+"\n", req.ID)
+	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{"real":true}}`+"\n", req.ID)
 
 	r := waitResult(t, out)
 	if r.err != nil {
