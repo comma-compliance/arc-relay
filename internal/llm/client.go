@@ -16,6 +16,10 @@ const (
 	defaultModel   = "claude-haiku-4-5-20251001"
 	apiVersion     = "2023-06-01"
 	maxTokens      = 16384
+
+	// DefaultTimeout bounds a single Messages API call. Thinking models
+	// (Sonnet/Opus) can take several minutes on a large tool batch.
+	DefaultTimeout = 5 * time.Minute
 )
 
 // Client is a minimal Anthropic Messages API client.
@@ -27,19 +31,34 @@ type Client struct {
 }
 
 // NewClient creates a new Anthropic API client.
-// If model is empty, defaults to claude-haiku-4-5.
-func NewClient(apiKey, model string) *Client {
+// If model is empty, defaults to claude-haiku-4-5. If timeout is zero,
+// defaults to DefaultTimeout.
+func NewClient(apiKey, model string, timeout time.Duration) *Client {
 	if model == "" {
 		model = defaultModel
+	}
+	if timeout <= 0 {
+		timeout = DefaultTimeout
 	}
 	return &Client{
 		apiKey:  apiKey,
 		model:   model,
 		baseURL: defaultBaseURL,
 		http: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: timeout,
 		},
 	}
+}
+
+// WithBaseURL overrides the Messages API endpoint (used by tests).
+func (c *Client) WithBaseURL(url string) *Client {
+	c.baseURL = url
+	return c
+}
+
+// Timeout returns the per-request timeout.
+func (c *Client) Timeout() time.Duration {
+	return c.http.Timeout
 }
 
 // Model returns the configured model name.

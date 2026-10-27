@@ -51,6 +51,7 @@ internal/
     relay/             HTTP client for Arc Relay API
     project/           Project detection (Claude Code, Cursor)
     safety/            Git safety checks
+  optimizer/           Background runner for LLM tool-optimization jobs
   oauth/               OAuth 2.1 client (PKCE, auto-discovery)
   auth/                Auth utilities
   catalog/             MCP server registry
@@ -130,6 +131,7 @@ TOML config file with environment variable overrides:
 | `ARC_RELAY_DB_PATH` | `database.path` | `arc-relay.db` |
 | `ARC_RELAY_BASE_URL` | `server.base_url` | `http://localhost:PORT` |
 | `ARC_RELAY_PORT` | `server.port` | `8080` |
+| `ARC_RELAY_LLM_TIMEOUT` | `llm.timeout` | `5m` |
 | `ARC_RELAY_SENTRY_DSN` | `sentry_dsn` | (disabled) |
 
 ## Code Style

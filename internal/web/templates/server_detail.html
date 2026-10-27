@@ -265,12 +265,12 @@
         <strong>Serve optimized tools</strong>
         <div style="font-size:0.8rem;color:var(--text-muted)">
           Status: <span id="opt-status" class="badge" style="{{if eq $audit.Status "ready"}}background:var(--success){{else if eq $audit.Status "stale"}}background:var(--warning){{else if eq $audit.Status "error"}}background:var(--danger){{else if eq $audit.Status "running"}}background:var(--info){{else}}background:#6c757d{{end}};color:#fff;font-size:0.75rem;padding:2px 8px">{{$audit.Status}}</span>
-          {{if eq $audit.Status "running"}} <span style="font-size:0.8rem;color:var(--text-muted)">Optimizing tools in background...</span>{{end}}
+          {{if or (eq $audit.Status "running") (eq $audit.Status "pending")}} <span style="font-size:0.8rem;color:var(--text-muted)">Optimizing tools in background...</span>{{end}}
           {{if $audit.IsStale}} <span style="color:var(--warning);font-size:0.8rem">(tools changed - re-run optimization)</span>{{end}}
           {{if $audit.Model}} <span style="font-size:0.75rem;color:var(--text-muted)">Model: {{$audit.Model}}</span>{{end}}
         </div>
       </div>
-      {{if eq $audit.Status "ready"}}
+      {{if $audit.HasResult}}
       <label class="switch">
         <input type="checkbox" id="opt-enable-toggle" onchange="toggleOptimize(this.checked)"
           {{if .Server.OptimizeEnabled}}checked{{end}}>

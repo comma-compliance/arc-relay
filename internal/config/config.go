@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -23,6 +25,23 @@ type Config struct {
 type LLMConfig struct {
 	APIKey string `toml:"api_key"`
 	Model  string `toml:"model"`
+	// Timeout bounds a single LLM request, as a Go duration ("5m") or
+	// plain seconds ("300"). Empty means the client default.
+	Timeout string `toml:"timeout"`
+}
+
+// TimeoutDuration parses Timeout. Returns 0 (client default) when unset or invalid.
+func (c LLMConfig) TimeoutDuration() time.Duration {
+	if c.Timeout == "" {
+		return 0
+	}
+	if d, err := time.ParseDuration(c.Timeout); err == nil {
+		return d
+	}
+	if secs, err := strconv.Atoi(c.Timeout); err == nil {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
 }
 
 type ServerConfig struct {
@@ -110,6 +129,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("ARC_RELAY_LLM_MODEL"); v != "" {
 		cfg.LLM.Model = v
+	}
+	if v := os.Getenv("ARC_RELAY_LLM_TIMEOUT"); v != "" {
+		cfg.LLM.Timeout = v
 	}
 	if v := os.Getenv("ARC_RELAY_SENTRY_DSN"); v != "" {
 		cfg.SentryDSN = v

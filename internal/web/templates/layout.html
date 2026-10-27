@@ -236,6 +236,7 @@
     <nav>
       <a href="/" {{if eq .Nav "dashboard"}}class="active"{{end}}>Dashboard</a>
       {{if and .User (eq .User.Role "admin")}}<a href="/servers" {{if eq .Nav "servers"}}class="active"{{end}}>Servers</a>{{end}}
+      {{if and .User (eq .User.Role "admin")}}<a href="/optimize" {{if eq .Nav "optimize"}}class="active"{{end}}>Optimizer</a>{{end}}
       {{if and .User (eq .User.Role "admin")}}<a href="/logs" {{if eq .Nav "logs"}}class="active"{{end}}>Logs</a>{{end}}
       {{if and .User (eq .User.Role "admin")}}<a href="/users" {{if eq .Nav "users"}}class="active"{{end}}>Users</a>{{end}}
       <a href="/api-keys" {{if eq .Nav "apikeys"}}class="active"{{end}}>API Keys</a>
