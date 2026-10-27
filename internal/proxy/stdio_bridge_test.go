@@ -72,12 +72,20 @@ func (fc *fakeContainer) sendAsync(t *testing.T, ctx context.Context, req *mcp.R
 		resp, err := fc.bridge.Send(ctx, req)
 		out <- sendResult{resp, err}
 	}()
+	fc.nextRequest(t)
+	return out
+}
+
+// nextRequest waits for the next request to reach the container's stdin.
+func (fc *fakeContainer) nextRequest(t *testing.T) *mcp.Request {
+	t.Helper()
 	select {
-	case <-fc.requests:
+	case req := <-fc.requests:
+		return req
 	case <-time.After(2 * time.Second):
 		t.Fatal("request never reached container stdin")
+		return nil
 	}
-	return out
 }
 
 func waitResult(t *testing.T, ch <-chan sendResult) sendResult {
@@ -98,7 +106,7 @@ func TestStdioBridgeRoundTrip(t *testing.T) {
 		resp, err := fc.bridge.Send(context.Background(), pingRequest(t, 42))
 		out <- sendResult{resp, err}
 	}()
-	req := <-fc.requests
+	req := fc.nextRequest(t)
 	if _, err := fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", req.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +150,7 @@ func TestStdioBridgeSameClientIDsDoNotCollide(t *testing.T) {
 
 	// The server sees both requests, then answers each under the id it was
 	// given, echoing who asked.
-	reqs := []*mcp.Request{<-fc.requests, <-fc.requests}
+	reqs := []*mcp.Request{fc.nextRequest(t), fc.nextRequest(t)}
 	if string(reqs[0].ID) == string(reqs[1].ID) {
 		t.Fatalf("both requests reached the server with id %s", reqs[0].ID)
 	}
@@ -291,7 +299,7 @@ func TestStdioBridgeIgnoresServerRequests(t *testing.T) {
 		resp, err := fc.bridge.Send(context.Background(), pingRequest(t, 1))
 		out <- sendResult{resp, err}
 	}()
-	req := <-fc.requests
+	req := fc.nextRequest(t)
 	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":"roots/list"}`+"\n", req.ID)
 	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"method":null}`+"\n", req.ID)
 	_, _ = fmt.Fprintf(fc.stdoutW, `{"jsonrpc":"2.0","id":%s,"result":{"real":true}}`+"\n", req.ID)
